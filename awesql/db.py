@@ -12,8 +12,9 @@ sqlite3.register_adapter(datetime, lambda val: val.isoformat())
 
 console = Console()
 
-DB_FILE = "project2025.db"
+# --- Configuration ---
 CONFIG_FILE = "awesql_config.json"
+DEFAULT_DB_NAME = "project2025.db"
 
 # --- Config Management ---
 
@@ -39,9 +40,14 @@ def load_config() -> dict:
 
 # --- Database and Data Loading Logic ---
 
-def create_connection():
-    """Create a database connection to the SQLite database."""
-    return sqlite3.connect(DB_FILE)
+def create_connection(db_name: str = DEFAULT_DB_NAME):
+    """Create a database connection to the SQLite database specified by db_name."""
+    try:
+        conn = sqlite3.connect(db_name)
+        return conn
+    except sqlite3.Error as e:
+        console.print(e)
+    return None
 
 def create_tables(conn, data_dir: str) -> bool:
     """
@@ -100,18 +106,27 @@ def import_real_data(conn, data_dir: str):
             
     console.print("[bold green]所有可用数据均已成功导入！[/bold green]")
 
-def db_exists():
-    """Check if the database file exists."""
-    return os.path.exists(DB_FILE)
+def db_exists(db_name: str = DEFAULT_DB_NAME) -> bool:
+    """Check if the database file exists and is not empty."""
+    if not os.path.exists(db_name) or os.path.getsize(db_name) == 0:
+        return False
+    try:
+        with create_connection(db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1")
+            if cursor.fetchone() is None:
+                return False
+        return True
+    except sqlite3.Error:
+        return False
 
-def execute_query(query: str):
+def execute_query(query: str, db_name: str = DEFAULT_DB_NAME):
     """
-    Executes a SQL query and its EXPLAIN QUERY PLAN.
-    Returns a tuple of (result_df, plan_df).
-    Returns (None, None) on error.
+    Execute a query and its EXPLAIN QUERY PLAN against the specified database.
+    Returns (result_df, plan_df) on success, or (None, None) on error.
     """
     try:
-        with create_connection() as conn:
+        with create_connection(db_name) as conn:
             plan_df = pd.read_sql_query(f"EXPLAIN QUERY PLAN {query}", conn)
             result_df = pd.read_sql_query(query, conn)
             return result_df, plan_df
@@ -122,16 +137,16 @@ def execute_query(query: str):
         console.print(f"[bold red]发生未知错误: {e}[/bold red]")
         return None, None
 
-def reset_db():
+def reset_db(db_name: str = DEFAULT_DB_NAME):
     """
     Deletes the existing database file, allowing for a clean import.
     """
-    if os.path.exists(DB_FILE):
-        console.print(f"正在删除现有数据库文件: [cyan]{DB_FILE}[/cyan]...")
-        os.remove(DB_FILE)
+    if os.path.exists(db_name):
+        console.print(f"正在删除现有数据库文件: [cyan]{db_name}[/cyan]...")
+        os.remove(db_name)
         console.print("[bold green]数据库已重置。[/bold green]")
     else:
-        console.print(f"[yellow]未找到可重置的数据库文件。[/yellow]")
+        console.print(f"[yellow]未找到可重置的数据库文件 '{db_name}'。[/yellow]")
 
 def reset_config():
     """Deletes the configuration file."""

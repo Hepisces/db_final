@@ -130,34 +130,97 @@ def visualize_query_result(df: pd.DataFrame, query: str):
             except ValueError:
                 console.print("[red]请输入有效的数字！[/red]")
 
+    def _prompt_for_multiple_columns(dframe: pd.DataFrame, purpose: str, min_selection: int = 1) -> list[str] | None:
+        """Helper function to prompt user to select multiple columns."""
+        console.print(f"\n请选择用作 [bold cyan]'{purpose}'[/bold cyan] 的列 (可多选，用逗号分隔):")
+        columns = dframe.columns.tolist()
+        for i, col in enumerate(columns, 1):
+            print(f"{i}. {col}")
+        print("0. 取消选择")
+
+        while True:
+            try:
+                choices_str = input("请输入列的编号 (例如: 1, 3, 4): ")
+                if choices_str.strip() == '0':
+                    return None
+                
+                choices_indices = [int(c.strip()) for c in choices_str.split(',') if c.strip()]
+                
+                if all(1 <= i <= len(columns) for i in choices_indices):
+                    selected_cols = [columns[i - 1] for i in choices_indices]
+                    if len(set(selected_cols)) < min_selection:
+                        console.print(f"[red]请至少选择 {min_selection} 个不同的列。[/red]")
+                        continue
+                    return selected_cols
+                else:
+                    console.print(f"[red]输入中包含无效的编号，请输入 1 到 {len(columns)} 之间的数字。[/red]")
+            except ValueError:
+                console.print("[red]请输入有效的、以逗号分隔的数字！[/red]")
+                
+    # --- 主可视化循环 ---
     while True:
+        # --- 图表推荐逻辑 ---
+        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        categorical_cols = df.select_dtypes(exclude=['number']).columns.tolist()
+        
+        available_charts = {}
+        recommendations = []
+
+        # 规则 1: 时间序列图
+        if len(numeric_cols) > 0 and any(name in df.columns for name in ['date', 'time', 'timestamp']):
+            available_charts[1] = "时间序列折线图"
+            recommendations.append(1)
+        
+        # 规则 2: 成对散点图 & 热力图
+        if len(numeric_cols) >= 2:
+            available_charts[2] = "成对散点图"
+            available_charts[5] = "相关性热力图"
+            if len(numeric_cols) > 2: # 多个数值列时更有意义
+                 recommendations.append(2)
+                 recommendations.append(5)
+
+        # 规则 3: 堆叠柱状图
+        if len(categorical_cols) > 0 and len(numeric_cols) > 0:
+             available_charts[3] = "堆叠柱状图"
+
+        # 规则 4: 箱线图
+        if len(numeric_cols) >= 1:
+            available_charts[4] = "箱线图"
+
+        # 规则 6 & 7: 分类图
+        if len(categorical_cols) >= 1 and len(numeric_cols) >= 1:
+            available_charts[6] = "分类柱状图"
+            available_charts[7] = "分类饼图"
+            if len(df[categorical_cols[0]].unique()) < 15: # 分类较少时推荐
+                recommendations.append(6)
+                recommendations.append(7)
+        
+        if not available_charts:
+            console.print("[yellow]未找到适用于当前数据的推荐图表类型。[/yellow]")
+            break
+
+        # --- 打印菜单 ---
         console.print("\n[bold cyan]🖼️  结果可视化[/bold cyan]")
-        console.print("请选择要生成的图表类型:")
-        print("1. 时间序列折线图 (需要一个时间列和至少一个数值列)")
-        print("2. 成对散点图 (需要至少两个数值列)")
-        print("3. 堆叠柱状图 (需要一个时间/分类列和多个数值列)")
-        print("4. 箱线图 (需要至少一个数值列)")
-        print("5. 相关性热力图 (需要至少两个数值列)")
-        print("6. 分类柱状图 (需要一个分类列和一个数值列)")
-        print("7. 分类饼状图 (需要一个分类列和一个数值列)")
+        console.print("我们根据您的数据推荐以下图表类型:")
+        
+        for chart_id, name in sorted(available_charts.items()):
+            is_recommended = "(推荐)" if chart_id in recommendations else ""
+            print(f"{chart_id}. {name} {is_recommended}")
         print("0. 退出可视化")
 
         try:
-            choice = int(input("请输入图表类型的编号: "))
-            if choice not in range(8):
-                console.print(f"[red]无效的选择，请输入 0 到 7 之间的数字。[/red]")
+            choice_input = input(f"请输入图表类型的编号: ")
+            choice = int(choice_input)
+            if choice == 0:
+                console.print("退出可视化。")
+                break
+            if choice not in available_charts:
+                console.print(f"[red]无效的选择，请输入菜单中可用的编号。[/red]")
                 continue
         except ValueError:
             console.print("[red]请输入有效的数字！[/red]")
             continue
-
-        if choice == 0:
-            console.print("退出可视化。")
-            break
-
-        # 每次循环时重新识别列类型，以防数据被修改
-        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-        
+            
         # 准备绘图
         plt.style.use('seaborn-v0_8-whitegrid')
         fig, ax = plt.subplots(figsize=(12, 7))
@@ -174,6 +237,11 @@ def visualize_query_result(df: pd.DataFrame, query: str):
             if not time_col:
                 plt.close(fig)
                 continue
+            
+            y_axis_cols = _prompt_for_multiple_columns(df[numeric_cols], "Y轴 (数值)", min_selection=1)
+            if not y_axis_cols:
+                plt.close(fig)
+                continue
 
             plot_df = df.copy()
             try:
@@ -186,30 +254,40 @@ def visualize_query_result(df: pd.DataFrame, query: str):
                 continue
             
             plot_generated = True
-            for col in numeric_cols:
+            for col in y_axis_cols:
                 ax.plot(plot_df[time_col], plot_df[col], label=col, marker='o', linestyle='-')
             ax.set_title("Time Series Plot", fontsize=16)
             ax.set_xlabel(time_col, fontsize=12)
             ax.set_ylabel("Value", fontsize=12)
             plt.xticks(rotation=45)
 
-        elif choice == 2 and len(numeric_cols) > 1:
+        elif choice == 2:
+            selected_numeric_cols = _prompt_for_multiple_columns(df[numeric_cols], "成对散点图", min_selection=2)
+            if not selected_numeric_cols:
+                plt.close(fig)
+                continue
+            
             plot_generated = True
             plt.close(fig) # Pairplot 创建自己的 figure
-            pair_plot = sns.pairplot(df[numeric_cols])
+            pair_plot = sns.pairplot(df[selected_numeric_cols])
             pair_plot.fig.suptitle("Pairplot of Numerical Values", y=1.02, fontsize=16)
 
         elif choice == 3:
+            categorical_cols = df.select_dtypes(exclude=['number']).columns.tolist()
             numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-            non_numeric_cols = df.select_dtypes(exclude=['number']).columns.tolist()
 
-            if not numeric_cols or not non_numeric_cols:
+            if not categorical_cols or not numeric_cols:
                 console.print("[bold red]错误：堆叠柱状图需要至少一个非数值列（作X轴）和至少一个数值列。[/bold red]")
                 plt.close(fig)
                 continue
             
-            x_col = _prompt_for_column(df[non_numeric_cols], "X轴 (类别/时间)")
+            x_col = _prompt_for_column(df[categorical_cols], "X轴 (类别/时间)")
             if not x_col:
+                plt.close(fig)
+                continue
+            
+            y_axis_cols = _prompt_for_multiple_columns(df[numeric_cols], "堆叠的数值", min_selection=1)
+            if not y_axis_cols:
                 plt.close(fig)
                 continue
                 
@@ -238,33 +316,54 @@ def visualize_query_result(df: pd.DataFrame, query: str):
             ax.set_title("Box Plot of Values", fontsize=16)
             ax.set_ylabel("Value", fontsize=12)
 
-        elif choice == 5 and len(numeric_cols) > 1:
+        elif choice == 5:
+            selected_numeric_cols = _prompt_for_multiple_columns(df[numeric_cols], "相关性热力图")
+            if not selected_numeric_cols:
+                plt.close(fig)
+                continue
+
             plot_generated = True
-            correlation_matrix = df[numeric_cols].corr()
+            correlation_matrix = df[selected_numeric_cols].corr()
             sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm", vmin=-1, vmax=1, ax=ax)
             ax.set_title("Correlation Heatmap", fontsize=16)
 
-        elif choice == 6 and len(non_numeric_cols) > 0 and len(numeric_cols) > 0:
+        elif choice == 6 and len(categorical_cols) > 0 and len(numeric_cols) > 0:
+            cat_col = _prompt_for_column(df[categorical_cols], "类别列 (X-axis)")
+            if not cat_col:
+                plt.close(fig)
+                continue
+            
+            num_col = _prompt_for_column(df[numeric_cols], "数值列 (Y-axis)")
+            if not num_col:
+                plt.close(fig)
+                continue
+
             plot_generated = True
-            cat_col = non_numeric_cols[0]
-            num_col = numeric_cols[0]
             sns.barplot(x=cat_col, y=num_col, data=df, ax=ax, palette='viridis')
             ax.set_title(f"Distribution of '{num_col}' by '{cat_col}'", fontsize=16)
             ax.set_xlabel(cat_col, fontsize=12)
             ax.set_ylabel(num_col, fontsize=12)
             plt.xticks(rotation=45)
 
-        elif choice == 7 and len(non_numeric_cols) > 0 and len(numeric_cols) > 0:
+        elif choice == 7 and len(categorical_cols) > 0 and len(numeric_cols) > 0:
+            cat_col = _prompt_for_column(df[categorical_cols], "类别列")
+            if not cat_col:
+                plt.close(fig)
+                continue
+            
+            num_col = _prompt_for_column(df[numeric_cols], "数值列")
+            if not num_col:
+                plt.close(fig)
+                continue
+
             plot_generated = True
-            cat_col = non_numeric_cols[0]
-            num_col = numeric_cols[0]
             # 聚合数据以防分类列中有重复项
             data_for_pie = df.groupby(cat_col)[num_col].sum()
             ax.pie(data_for_pie, labels=data_for_pie.index, autopct='%1.1f%%', colors=sns.color_palette('viridis', len(data_for_pie)))
             ax.set_title(f"Proportion of '{num_col}' by '{cat_col}'", fontsize=16)
 
         else:
-            console.print("[bold red]数据不满足所选图表类型的要求，请重新选择。[/bold red]")
+            console.print("[bold red]数据不满足所选图表类型的要求或选择无效，请重新选择。[/bold red]")
             plt.close(fig) # 关闭未使用的figure
             continue
             

@@ -418,14 +418,15 @@ def _is_admin(username, password):
 def run(
     query: str = typer.Argument(..., help="要执行和可视化的SQL查询。"),
     username: str = typer.Option(None, "--user", "-u", help="执行修改性查询所需的管理员用户名。"),
-    password: str = typer.Option(None, "--pass", "-p", help="执行修改性查询所需的管理员密码。", hide_input=True)
+    password: str = typer.Option(None, "--pass", "-p", help="执行修改性查询所需的管理员密码。", hide_input=True),
+    db_name: str = typer.Option("project2025.db", "--db-name", help="要查询的数据库文件的名称。")
 ):
     """
     执行SQL查询，显示结果/计划，并提供交互式可视化。
     如果查询可能修改数据，则需要管理员权限。
     """
-    if not db.db_exists():
-        console.print("[bold yellow]数据库不存在或为空，请先运行 `awesql import-data`。[/bold yellow]")
+    if not db.db_exists(db_name):
+        console.print(f"[bold yellow]数据库 '{db_name}' 不存在或为空，请先运行 `awesql import-data`。[/bold yellow]")
         return
     
     # 对非只读查询强制执行管理员检查
@@ -443,8 +444,8 @@ def run(
             return  # 中止操作
 
     try:
-        console.print(f"正在执行查询: [bold white]'{query}'[/bold white]")
-        df, plan_df = db.execute_query(query)
+        console.print(f"正在执行查询: [bold white]'{query}'[/bold white] on [cyan]{db_name}[/cyan]")
+        df, plan_df = db.execute_query(query, db_name)
 
         if plan_df is not None:
             visualizer.draw_query_plan(plan_df)
@@ -468,33 +469,35 @@ def import_data(
         dir_okay=True,
         resolve_path=True,
     ),
+    db_name: str = typer.Option("project2025.db", "--db-name", help="为数据库指定一个自定义名称。")
 ):
     """
     将SQL文件中的数据导入新数据库。
     此命令在导入前会重置数据库。
     """
-    db.reset_db()
+    db.reset_db(db_name)
     
     try:
-        with db.create_connection() as conn:
+        with db.create_connection(db_name) as conn:
             if not db.create_tables(conn, str(data_dir)):
                 console.print("[bold red]创建数据库表失败，导入中止。[/bold red]")
                 return
             db.import_real_data(conn, str(data_dir))
-        console.print("[bold green]所有数据已成功导入。[/bold green]")
+        console.print(f"[bold green]所有数据已成功导入到 '{db_name}'。[/bold green]")
     except Exception as e:
         console.print(f"[bold red]数据导入期间出错: {e}[/bold red]")
 
 @app.command()
 def reset_db(
     username: str = typer.Option(..., "--user", "-u", help="管理员用户名。", prompt=True),
-    password: str = typer.Option(..., "--pass", "-p", help="管理员密码。", prompt=True, hide_input=True)
+    password: str = typer.Option(..., "--pass", "-p", help="管理员密码。", prompt=True, hide_input=True),
+    db_name: str = typer.Option("project2025.db", "--db-name", help="要删除的数据库文件的名称。")
 ):
     """(仅限管理员) 删除现有数据库文件以重新开始。"""
     if not _is_admin(username, password):
         return
     try:
-        db.reset_db()
+        db.reset_db(db_name)
         # 成功删除数据库后，询问是否删除配置文件
         if os.path.exists(db.CONFIG_FILE):
             delete_config = typer.confirm(
