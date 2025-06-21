@@ -1,14 +1,37 @@
 from setuptools import setup, find_packages
 
-with open("requirements.txt", encoding='utf-8') as f:
-    required = f.read().splitlines()
+# Core dependencies
+core_requires = [
+    'typer[all]',
+    'pandas',
+    'sqlparse',
+    'requests',
+    'matplotlib',
+    'seaborn',
+    'rich',
+    'plotly',
+    'kaleido',
+    'sqlparse',
+    'pandas'
+]
+
+# Optional dependencies for ML/AI features
+extras_require = {
+    'AI': [
+        'transformers',
+        'torch',
+        'sentencepiece',
+        'accelerate'
+    ]
+}
 
 setup(
     name="awesql",
     version="0.1.0",
     packages=find_packages(),
     include_package_data=True,
-    install_requires=required,
+    install_requires=core_requires,
+    extras_require=extras_require,
     entry_points={
         'console_scripts': [
             'awesql = awesql.cli:app',

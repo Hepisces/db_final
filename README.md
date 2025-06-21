@@ -27,13 +27,15 @@
 conda create -n awesql python=3.12 -y
 conda activate awesql
 
-# 2. 安装依赖
-# 确保项目根目录存在 'requirements.txt' 文件
-pip install -r requirements.txt
+# 2. 安装本工具 (两种模式可选)
 
-# 3. 以可编辑模式安装本工具
-# '.' 指的是项目根目录
+# A) 标准安装 (不包含本地AI问答功能)
+# 这将安装运行核心功能所需的所有库。
 pip install -e .
+
+# B) 完整安装 (包含所有功能)
+# 这将额外安装 torch, transformers 等用于本地AI的库。
+pip install -e '.[AI]'
 ```
 
 > **可编辑模式** (`-e`) 安装后，您对源代码的任何修改都会立刻生效，无需重装。

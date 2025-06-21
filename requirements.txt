@@ -2,9 +2,8 @@ typer[all]
 pandas
 sqlparse
 requests
-transformers
-torch
-sentencepiece
-accelerate
 matplotlib
-seaborn 
+seaborn
+rich
+plotly
+kaleido 
