@@ -3,3 +3,22 @@ text2sql/.DS_Store
 text2sql/models--defog--sqlcoder-7b-2
 text2sql/token.txt
 .DS_Store
+
+# Generated database file
+visualization_demo.db
+*.db
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE files
+.vscode/
+.idea/
