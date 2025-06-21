@@ -14,7 +14,7 @@ setup(
             'awesql = awesql.cli:app',
         ],
     },
-    author="Jiawei He & Lufan Ha & Yiran Yan",
+    author="Jiawei He & Lufan Han & Yiran Yan",
     description="A command-line tool to execute SQL queries and visualize the results and execution plan.",
     long_description=open('README.md').read(),
     long_description_content_type="text/markdown",

@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.tree import Tree
 from rich.progress import track
+from pathlib import Path
 
 # Import refactored modules
 from . import db
@@ -29,6 +30,12 @@ app = typer.Typer(
     help="awesql: A powerful CLI to run, visualize, and check SQL queries.",
     rich_markup_mode="markdown"
 )
+config_app = typer.Typer(
+    help="Manage tool configuration (e.g., model and DDL file paths).",
+    name="config",
+    rich_markup_mode="markdown"
+)
+app.add_typer(config_app)
 console = Console()
 
 DB_FILE = "visualization_demo.db"
@@ -448,19 +455,29 @@ def run(
 @app.command()
 def import_data(
     username: str = typer.Option(..., "--user", "-u", help="Admin username for this operation.", prompt=True),
-    password: str = typer.Option(..., "--pass", "-p", help="Admin password.", prompt=True, hide_input=True),
-    data_dir: str = typer.Argument("Smart_Home_DATA", help="Directory containing DDL.sql and data files.")
+    password: str = typer.Option(..., "--pass", "-p", help="Admin password.", prompt=True, hide_input=True)
 ):
     """
-    (Admin Only) Creates 'project2025.db' and imports data from a directory.
+    (Admin Only) Creates 'project2025.db' and imports data.
 
-    This command initializes the database from a specified data directory. It requires
-    the directory to contain a `DDL.sql` file for the schema. Upon successful
-    import, it saves the directory path to be automatically used by the `ask` command.
+    This command uses the DDL path from the configuration to initialize the database.
+    Please set the DDL path first using 'awesql config set-ddl-path'. The tool
+    will automatically find data files (`.sql`) in the same directory as the DDL file.
     """
     if not _is_admin(username, password):
         console.print("[bold red]Authentication failed. Admin privileges required.[/bold red]")
         raise typer.Exit(code=1)
+
+    config = db.load_config()
+    ddl_path = config.get('ddl_path')
+
+    if not ddl_path:
+        console.print("[bold red]Error: DDL path not configured.[/bold red]")
+        console.print("Please set the path to your DDL.sql file by running:")
+        console.print("  [bold cyan]awesql config set-ddl-path /path/to/your/DDL.sql[/bold cyan]")
+        raise typer.Exit(code=1)
+    
+    data_dir = str(Path(ddl_path).parent)
 
     if db.db_exists():
         console.print("[yellow]Database 'project2025.db' already exists.[/yellow]")
@@ -472,10 +489,8 @@ def import_data(
         conn = db.create_connection()
         db.create_tables(conn, data_dir)
         db.import_real_data(conn, data_dir)
-        # On success, save the data directory path for future use by 'ask'
-        db.save_config({'data_dir': os.path.abspath(data_dir)})
     except FileNotFoundError:
-        console.print("[bold red]Import process failed because DDL.sql was not found.[/bold red]")
+        console.print(f"[bold red]Import process failed. Ensure 'DDL.sql' exists at the configured path:[/bold red] {ddl_path}")
     except Exception as e:
         console.print(f"[bold red]Import process failed: {e}[/bold red]")
     finally:
@@ -506,12 +521,30 @@ def check(
     (Public) Checks an SQL query for correctness using an external AI service.
 
     This command sends the provided SQL query to an AI for analysis. It returns
-    feedback on syntax errors and provides suggestions for correction.
+    feedback on syntax errors and provides suggestions for correction. It automatically
+    uses the database schema from the DDL path set in the configuration.
     """
     console.print(f"[bold]Checking Query:[/bold] [white]{query}[/white]")
+    
+    config = db.load_config()
+    ddl_path = config.get('ddl_path')
+
+    schema_content = ""
+    if ddl_path:
+        try:
+            with open(ddl_path, 'r', encoding='utf-8') as f:
+                schema_content = f.read()
+            console.print(f"Automatically using schema from configured path: [cyan]{ddl_path}[/cyan]")
+        except FileNotFoundError:
+            console.print(f"[yellow]Warning: Could not find file at the configured DDL path '{ddl_path}'. Checking query without schema context.[/yellow]")
+    else:
+        console.print("[yellow]Warning: DDL path not configured. Checking query without schema context.[/yellow]")
+        console.print("[yellow]For better results, set it via 'awesql config set-ddl-path'.[/yellow]")
+
+
     console.print("\n[yellow]正在请求AI检查，请稍候...[/yellow]")
     
-    suggestion = checker.check_sql_query(query)
+    suggestion = checker.check_sql_query(query, schema_content)
     
     console.print("\n[bold cyan]🤖 AI 分析结果:[/bold cyan]")
     console.print(suggestion)
@@ -524,33 +557,83 @@ def ask(
     (Public) Converts a natural language question to an SQL query using a local AI model.
 
     This command uses a local Text-to-SQL model to translate your question into an
-    SQL query. It **automatically** uses the database schema from the last successful
-    `import-data` command, so no schema file needs to be specified manually.
+    SQL query. It **automatically** uses the database schema from the configured
+    DDL path. Please set both model and DDL paths first using the 'config' command.
     """
     console.print(f"[bold]Question:[/bold] [white]{question}[/white]")
     
     config = db.load_config()
-    data_dir = config.get('data_dir')
+    ddl_path = config.get('ddl_path')
 
-    if not data_dir:
-        console.print("[bold red]Error: No data source has been configured yet.[/bold red]")
-        console.print("Please ask an admin to run the `import-data` command first.")
+    if not ddl_path:
+        console.print("[bold red]Error: DDL path not configured.[/bold red]")
+        console.print("Please set the path to your DDL.sql file by running:")
+        console.print("  [bold cyan]awesql config set-ddl-path /path/to/your/DDL.sql[/bold cyan]")
         raise typer.Exit(code=1)
 
-    schema_path = os.path.join(data_dir, "DDL.sql")
     schema_content = ""
     try:
-        with open(schema_path, 'r', encoding='utf-8') as f:
+        with open(ddl_path, 'r', encoding='utf-8') as f:
             schema_content = f.read()
-        console.print(f"Automatically using schema from: [cyan]{schema_path}[/cyan]")
+        console.print(f"Automatically using schema from configured path: [cyan]{ddl_path}[/cyan]")
     except FileNotFoundError:
-        console.print(f"[bold red]Error: Could not find 'DDL.sql' in the configured data source: '{data_dir}'[/bold red]")
+        console.print(f"[bold red]Error: Could not find file at the configured DDL path: '{ddl_path}'[/bold red]")
         raise typer.Exit(code=1)
 
     sql_query = text2sql.generate_sql(question, schema_content)
     
     console.print("\n[bold green]🤖 Generated SQL Query:[/bold green]")
     console.print(f"[white]{sql_query}[/white]")
+
+@config_app.command("set-model-path")
+def set_model_path(
+    path: Path = typer.Argument(..., help="The absolute path to the local Hugging Face model directory.")
+):
+    """
+    Sets and saves the path to your local SQLCoder model directory.
+    """
+    if not path.is_dir():
+        console.print(f"[bold red]Error: The provided path is not a valid directory.[/bold red]")
+        console.print(f"Path provided: '{path}'")
+        raise typer.Exit(code=1)
+
+    config = db.load_config()
+    model_path_str = str(path.resolve())
+    config['model_path'] = model_path_str
+    db.save_config(config)
+    console.print(f"✅ Model path successfully set to: [cyan]{model_path_str}[/cyan]")
+
+@config_app.command("set-ddl-path")
+def set_ddl_path(
+    path: Path = typer.Argument(..., help="The absolute or relative path to your 'DDL.sql' file.")
+):
+    """
+    Sets and saves the path to your DDL.sql file for data import and analysis.
+    The tool will look for data files (`.sql`) in the same directory as this file.
+    """
+    if not path.is_file():
+        console.print(f"[bold red]Error: The provided path is not a valid file.[/bold red]")
+        raise typer.Exit(code=1)
+
+    config = db.load_config()
+    ddl_path_str = str(path.resolve())
+    config['ddl_path'] = ddl_path_str
+    db.save_config(config)
+    console.print(f"✅ DDL file path successfully set to: [cyan]{ddl_path_str}[/cyan]")
+
+@config_app.command("show")
+def show_config():
+    """
+    Displays the current configuration, including model and DDL paths.
+    """
+    config = db.load_config()
+    if not config:
+        console.print("[yellow]No configuration found. Please run 'import-data' or 'config set-model-path' to create one.[/yellow]")
+        return
+    
+    console.print("[bold cyan]Current `awesql` Configuration:[/bold cyan]")
+    for key, value in sorted(config.items()):
+        console.print(f"  [green]{key}[/green]: {value}")
 
 if __name__ == "__main__":
     app() 

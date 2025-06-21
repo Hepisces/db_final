@@ -4,6 +4,9 @@ import os
 import warnings
 from rich.console import Console
 
+# Import db module to access config functions
+from . import db
+
 console = Console()
 
 # Ignore specific warnings from transformers
@@ -17,8 +20,8 @@ _model_cache = {
 
 def load_model():
     """
-    Loads the SQLCoder model and tokenizer from a local path.
-    Caches the model and tokenizer globally to avoid reloading on subsequent calls.
+    Loads the SQLCoder model and tokenizer from a local path specified in the config,
+    with a fallback to a default path. Caches the model to avoid reloading.
     """
     if _model_cache["model"] and _model_cache["tokenizer"]:
         console.print("[green]Model already loaded from cache.[/green]")
@@ -26,16 +29,30 @@ def load_model():
 
     console.print("[yellow]Loading SQLCoder model... (This might take a moment on first run)[/yellow]")
     
+    config = db.load_config()
+    model_path = config.get('model_path')
+    using_default_path = False
+
+    if not model_path:
+        using_default_path = True
+        default_path_str = os.path.join("text2sql", "models--defog--sqlcoder-7b-2", "snapshots", "7e5b6f7981c0aa7d143f6bec6fa26625bdfcbe66")
+        console.print(f"[yellow]Warning: Model path not configured. Falling back to default path:[/yellow]")
+        console.print(f"  [dim]{default_path_str}[/dim]")
+        console.print(f"  [yellow]You can set a custom path with 'awesql config set-model-path'.[/yellow]")
+        model_path = default_path_str
+
     try:
-        # Correctly construct the path for cross-platform compatibility
-        model_path = os.path.join("text2sql", "models--defog--sqlcoder-7b-2", "snapshots", "7e5b6f7981c0aa7d143f6bec6fa26625bdfcbe66")
-        
         if not os.path.isdir(model_path):
-            console.print(f"[bold red]Error: Model directory not found at '{os.path.abspath(model_path)}'[/bold red]")
-            console.print("Please make sure the SQLCoder model is downloaded and placed in the project root.")
+            console.print(f"[bold red]Error: Model path is not a valid directory.[/bold red]")
+            if using_default_path:
+                console.print(f"Default path not found: '{os.path.abspath(model_path)}'")
+                console.print("Please make sure the model exists at the default location or set a custom path.")
+            else:
+                console.print(f"Path from config: '{model_path}'")
+                console.print("Please set a correct path using 'awesql config set-model-path'.")
             return None, None
 
-        console.print(f"Loading model from local path: [cyan]{model_path}[/cyan]")
+        console.print(f"Loading model from path: [cyan]{model_path}[/cyan]")
         
         tokenizer = AutoTokenizer.from_pretrained(
             model_path,

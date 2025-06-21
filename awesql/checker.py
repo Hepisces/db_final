@@ -1,6 +1,6 @@
 import requests
 
-def check_sql_query(user_query: str) -> str:
+def check_sql_query(user_query: str, schema: str = "") -> str:
     """
     Sends a SQL query to an external API for checking and suggestions.
     """
@@ -16,7 +16,8 @@ def check_sql_query(user_query: str) -> str:
         "bot_id": "7509387207439138851",
         "user": "student_123",
         "query": prompt,
-        "stream": False
+        "stream": False,
+        "db_info": schema
     }
 
     try:

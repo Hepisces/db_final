@@ -1,30 +1,27 @@
 # AwesomeSQL (`awesql`)
 
-`awesql` is a powerful, educational command-line tool designed to interact with databases. It allows users to not only execute SQL queries but also visualize their results and execution plans, and even get AI-powered feedback on their query syntax or translate natural language into SQL.
+`awesql` is a powerful, educational command-line tool designed to interact with databases. It allows users to execute SQL queries, visualize results, check syntax, and translate natural language into SQL.
 
 Built with Python, Typer, and Rich, `awesql` provides a rich, terminal-first user experience.
 
 ## Core Features
 
+-   **Centralized Configuration**: Easily manage paths to your local AI model and DDL file using the `awesql config` command group.
 -   **Admin-Protected Database Management**: Securely import data and reset the database using administrator credentials.
--   **Execute & Visualize**: Run SQL queries and get instant visual feedback.
-    -   View the query execution plan, annotated with human-readable explanations.
-    -   See results formatted in a clean, readable table.
-    -   Generate and automatically open high-resolution charts (bar, line, step charts).
+-   **Execute & Visualize**: Run SQL queries and get instant visual feedback, including an annotated query plan and high-resolution charts.
 -   **AI-Powered Query Assistant**:
-    -   `check`: Get suggestions and corrections for your SQL queries from an AI service.
-    -   `ask`: Translate a natural language question into a full SQL query using a local model.
--   **Smart Context**: The `ask` command automatically uses the schema from the last successful data import, eliminating the need to specify it manually.
--   **Modular and Extendable**: Built with a clean, modular architecture that is easy to understand and extend.
+    -   `check`: Get suggestions and corrections for your SQL queries.
+    -   `ask`: Translate a natural language question into a full SQL query.
+-   **Smart Context**: The `ask` and `check` commands automatically use the schema from the configured DDL path, ensuring high-quality, context-aware AI assistance.
 
 ## Installation
 
-It is highly recommended to work within a virtual environment.
+We recommend using Conda to manage your environment.
 
 ```bash
-# 1. Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
+# 1. Create and activate a Conda environment
+conda create -n awesql python=3.12 -y
+conda activate awesql
 
 # 2. Install the tool and its dependencies in editable mode
 # The '.' refers to the current directory (project root).
@@ -33,69 +30,73 @@ pip install -e .
 
 Installing in "editable" mode (`-e`) means any changes you make to the source code will be immediately effective without needing to reinstall.
 
-## Workflow and Usage
+## Standard Workflow
 
-The tool is structured around a single main command, `awesql`, with several sub-commands.
+The recommended workflow is to first set your paths using the `config` command, then use the other commands to manage and query your data.
 
-### 1. Prepare Your Data
+### 1. (One-Time Setup) Configure Paths
 
-Before you begin, you need a data directory containing your SQL files. By default, the tool looks for `Smart_Home_DATA`. This directory **must** contain:
--   `DDL.sql`: The file that defines the database table schema.
--   Your data files (e.g., `customer.sql`, `devupdata.sql`, etc.).
+This is the most important first step. You need to tell `awesql` where to find your AI model and your database schema file.
+
+**A. Set the DDL File Path**
+This file is the source of truth for your database schema.
+```bash
+awesql config set-ddl-path /path/to/your/DDL.sql
+```
+
+**B. Set the Local AI Model Path**
+This is required for the `ask` (Text-to-SQL) command.
+```bash
+awesql config set-model-path /path/to/your/local_sql_model
+```
+
+**C. Verify Configuration**
+You can view your saved settings at any time.
+```bash
+awesql config show
+```
+*Expected Output:*
+```
+Current `awesql` Configuration:
+  ddl_path: /path/to/your/DDL.sql
+  model_path: /path/to/your/local_sql_model
+```
 
 ### 2. Import the Database (Admin Only)
 
-This command creates and populates the `project2025.db` database. It is a protected operation requiring admin credentials. Upon success, it also saves the data directory path for the `ask` command to use automatically.
+Once the DDL path is configured, an admin can create and populate the database. The tool automatically looks for data files (`.sql`) in the same directory as your configured `DDL.sql`.
 
 ```bash
 # The tool will prompt for username and password if not provided.
 awesql import-data
 ```
-You can also specify the user and a different data directory:
+
+### 3. Query and Analyze (Public)
+
+With the database imported, any user can run queries and use the AI assistant tools.
+
+**A. Execute a Query**
 ```bash
-awesql import-data -u admin path/to/your/data_folder
+awesql run "SELECT type, COUNT(*) FROM devlist GROUP BY type"
 ```
 
-### 3. Run a Query (Public)
-
-Once the database is created, any user can run queries.
-
-**Example:**
-```bash
-awesql run "SELECT type, COUNT(did) AS device_count FROM devlist GROUP BY type ORDER BY device_count DESC"
-```
-This will print the query plan, show the results table, and open a generated bar chart.
-
-### 4. AI-Powered Assistance (Public)
-
-#### Check a Query's Syntax
-
-If you're unsure about a query, use the `check` command.
-
-**Example:**
+**B. Check a Query**
+The tool automatically uses the configured DDL path for context.
 ```bash
 awesql check "SELEC name FRM customer"
 ```
-The tool will return AI-powered analysis and corrections.
 
-#### Ask a Question in Natural Language
-
-Use the `ask` command to translate a question into SQL. It automatically uses the schema from the last `import-data` run.
-
-**Prerequisite:** Ensure the local SQLCoder model is downloaded and placed in the project root as specified in the original `text2sql/demo.ipynb`.
-
-**Example:**
+**C. Ask a Question**
+The tool uses both the DDL context and the configured local AI model.
 ```bash
 awesql ask "Find all customers who never placed an order"
 ```
-The tool will load the local model and print the generated SQL query.
 
-### 5. Reset the Database (Admin Only)
+### 4. Reset the Database (Admin Only)
 
-To delete the database and start fresh, use the `reset-db` command. This is also a protected operation.
+To delete the database and start fresh, use the `reset-db` command.
 
 ```bash
-# The tool will prompt for the admin username and password.
 awesql reset-db
 ```
 After resetting, you must run `import-data` again to recreate the database. 
