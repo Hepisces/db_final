@@ -11,7 +11,7 @@ Smart_Home_DATA/*
 awesql_config.json
 output
 # Generated database file
-visualization_demo.db
+visualization/*
 *.db
 
 # Python cache

@@ -30,8 +30,8 @@ conda activate awesql
 # 1. 基础安装（核心功能）
 pip install -e .
 
-# 2. 完整安装（包含NLP组件）
-pip install -e '.[ml]'
+# 2. 完整安装（包含text2sql组件）
+pip install -e '.[AI]'
 ```
 
 ## 功能与用法
