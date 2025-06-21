@@ -467,7 +467,7 @@ def run(
     if result_df is None:
         console.print("[bold red]查询执行失败，无法继续。[/bold red]")
         raise typer.Exit(code=1)
-
+        
     # 1. Draw Query Plan
     if plan_df is not None and not plan_df.empty:
         draw_query_plan(plan_df)
@@ -476,7 +476,7 @@ def run(
 
     # 2. Print Results Table
     print_results_table(result_df)
-
+        
     # 3. Visualize and Save Chart
     if not result_df.empty:
         # Create a safe filename from the query
@@ -511,7 +511,7 @@ def tables(
     if not table_names:
         console.print("[yellow]数据库中没有找到任何表。[/yellow]")
         return
-
+        
     table = Table(title=f"数据库 '{db_name}' 中的表", show_header=True, header_style="bold magenta")
     table.add_column("序号", style="dim", width=6)
     table.add_column("表名")
