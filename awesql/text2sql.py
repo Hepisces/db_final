@@ -30,6 +30,7 @@ def _load_model_and_tokenizer(model_path: str):
             trust_remote_code=True,
             torch_dtype=torch.float16,
             device_map="auto",
+            local_files_only=True,
             use_cache=True,
         )
         return tokenizer, model
@@ -68,25 +69,17 @@ def generate_sql(question: str, ddl_path: str, model_path: str) -> str:
     except FileNotFoundError as e:
         return str(e)
 
-    prompt = f"""### Instructions:
-Your task is to convert a question into a SQL query, given a database schema.
-Adhere to these rules:
-- **Deliberately go through the question and database schema word by word** to appropriately answer the question.
-- **Use Table Aliases** to prevent ambiguity. For example, `SELECT table1.col1, table2.col2 FROM table1 JOIN table2 ON table1.id = table2.id`.
-- When creating a ratio, always cast the numerator as `REAL` or `FLOAT` to ensure precision.
+    prompt = f"""### Task
+Generate a SQLite query to answer [QUESTION]{question}[/QUESTION]
 
-### Input:
-Generate a SQL query that answers the following question:
-`{question}`
-
-### Database Schema:
-This is the schema of the database:
-```sql
+### Database Schema
+The query will run on a database with the following schema:
 {ddl}
-```
 
-### Response:
-```sql
+### Answer
+Given the database schema, here is the SQLite query that [QUESTION]{question}[/QUESTION]
+[SQL]
+
 """
     console.print("正在生成SQL查询...")
     try:
@@ -100,22 +93,23 @@ This is the schema of the database:
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=200,
+                max_new_tokens=4096,
                 do_sample=False,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
-                num_beams=5,
-                num_return_sequences=1
+                num_beams=4
             )
         
-        generated_sql = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        # Clean up the output to only get the SQL
-        if "```sql" in generated_sql:
-            generated_sql = generated_sql.split("```sql")[1]
-        if "```" in generated_sql:
-            generated_sql = generated_sql.split("```")[0]
+        full_output = tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        generated_sql = generated_sql.strip()
+        sql_parts = full_output.split("[SQL]")
+        if len(sql_parts) > 1:
+            generated_sql = sql_parts[-1].strip()
+            # 进一步清理，移除可能存在的"[/SQL]"或其他标记
+            if "[/SQL]" in generated_sql:
+                generated_sql = generated_sql.split("[/SQL]")[0].strip()
+        else:
+            generated_sql = ""
 
         end_time = time.time()
         console.print(f"[green]在 {end_time - start_time:.2f} 秒内生成SQL。[/green]")

@@ -14,7 +14,9 @@ from rich.console import Console
 from rich.table import Table
 from rich.tree import Tree
 from rich.progress import track
+from rich.syntax import Syntax
 from pathlib import Path
+from typer.models import OptionInfo
 
 # Import refactored modules
 from . import db
@@ -422,11 +424,21 @@ def run(
     db_name: str = typer.Option("project2025.db", "--db-name", help="要查询的数据库文件的名称。")
 ):
     """
-    执行SQL查询，显示结果/计划，并提供交互式可视化。
-    如果查询可能修改数据，则需要管理员权限。
+    执行SQL查询，检查其类型，并根据结果采取行动。
+    对于只读查询，它会显示结果、查询计划和可视化。
+    对于修改性查询（INSERT, UPDATE, DELETE），它需要管理员凭据。
     """
-    if not db.db_exists(db_name):
-        console.print(f"[bold yellow]数据库 '{db_name}' 不存在或为空，请先运行 `awesql import-data`。[/bold yellow]")
+    console.print(f"正在执行查询: \"[cyan]{query}[/cyan]\"")
+
+    # When called programmatically from `ask`, db_name can be an OptionInfo object
+    if isinstance(db_name, OptionInfo):
+        effective_db_file = db_name.default
+    else:
+        effective_db_file = db_name
+
+    # Check if the database exists and initialize if necessary
+    if not db.db_exists(effective_db_file):
+        console.print(f"[yellow]数据库 '{effective_db_file}' 不存在或为空。正在初始化...[/yellow]")
         return
     
     # 对非只读查询强制执行管理员检查
@@ -438,14 +450,14 @@ def run(
             username = typer.prompt("请输入管理员用户名")
         if password is None:
             # Manually prompt for password since hide_input is not available on the option itself when None
-             password = typer.prompt("请输入管理员密码", hide_input=True)
+            password = typer.prompt("请输入管理员密码", hide_input=True)
 
         if not _is_admin(username, password):
             return  # 中止操作
 
     try:
-        console.print(f"正在执行查询: [bold white]'{query}'[/bold white] on [cyan]{db_name}[/cyan]")
-        df, plan_df = db.execute_query(query, db_name)
+        console.print(f"正在执行查询: [bold white]'{query}'[/bold white] on [cyan]{effective_db_file}[/cyan]")
+        df, plan_df = db.execute_query(query, effective_db_file)
 
         if plan_df is not None:
             visualizer.draw_query_plan(plan_df)
@@ -533,27 +545,35 @@ def ask(
     question: str = typer.Argument(..., help="要转换为SQL的自然语言问题。")
 ):
     """将自然语言问题翻译成SQL查询。"""
-    console.print(f"正在根据您的问题生成SQL: \"[cyan]{question}[/cyan]\"")
-    config = db.load_config()
-    
-    ddl_path = config.get("ddl_path")
-    if not ddl_path or not os.path.exists(ddl_path):
-        console.print("[bold red]错误：DDL文件路径未配置或无效。[/bold red]")
-        console.print("请运行 `awesql config set-ddl-path /path/to/your/DDL.sql` 进行设置。")
-        return
-
-    model_path = config.get("model_path")
-    if not model_path:
-        console.print("[bold red]错误：本地模型路径未配置。[/bold red]")
-        console.print("请运行 `awesql config set-model-path /path/to/your/model`进行设置。")
-        return
-        
+    console.print(f"正在根据您的问题生成SQL: \"{question}\"")
     try:
+        config = db.load_config()
+        model_path = config.get("model_path")
+        ddl_path = config.get("ddl_path")
+
+        if not model_path or not ddl_path:
+            console.print("[bold red]错误: 模型路径或DDL路径未配置。[/bold red]")
+            console.print("请运行 [bold]'awesql config set-model-path'[/bold] 和 [bold]'awesql config set-ddl-path'[/bold]进行设置。")
+            return
+
         sql_query = text2sql.generate_sql(question, ddl_path, model_path)
-        if sql_query:
-            console.print(f"\n[bold green]生成的SQL查询:[/bold green]\n[white on black]{sql_query}[/white on black]")
-            if typer.confirm("您想立即执行此查询吗?"):
-                run(sql_query)
+        
+        if not sql_query:
+            console.print("[bold red]无法生成SQL查询。请检查模型或问题。[/bold red]")
+            return
+            
+        console.print("\n[bold green]🎉 生成的SQL查询:[/bold green]")
+        syntax = Syntax(sql_query, "sql", theme="github-dark", line_numbers=True)
+        console.print(syntax)
+
+        if typer.confirm("是否要对此SQL进行检查?"):
+            check(query=sql_query)
+            
+        # if typer.confirm("您想立即执行此查询吗?"):
+        #     run(query=sql_query)
+        console.print(f"生成成功, 可以使用[bold]'awesql run'[/bold]执行此查询")
+
+
     except Exception as e:
         console.print(f"[bold red]文本到SQL转换期间出错: {e}[/bold red]")
 
