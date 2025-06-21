@@ -8,6 +8,9 @@ import seaborn as sns
 from rich.console import Console
 from rich.table import Table
 from rich.tree import Tree
+import re
+import textwrap
+from pathlib import Path
 
 console = Console()
 
@@ -79,6 +82,101 @@ def open_file(filepath):
     except (FileNotFoundError, subprocess.CalledProcessError) as e:
         console.print(f"[bold red]Could not automatically open file:[/bold red] {e}")
         console.print(f"Please find it at: {os.path.abspath(filepath)}")
+
+def generate_er_diagram(ddl_path: str, output_path: str):
+    """
+    Parses a DDL file to generate a Mermaid ER diagram and saves it as an HTML file.
+    """
+    try:
+        with open(ddl_path, 'r', encoding='utf-8') as f:
+            ddl_content = f.read()
+    except FileNotFoundError:
+        console.print(f"[bold red]错误: DDL文件未找到: {ddl_path}[/bold red]")
+        return
+
+    tables = {}
+    relationships = []
+
+    # Regex to find tables and their columns
+    table_pattern = re.compile(r"CREATE TABLE\s+(\w+)\s+\((.*?)\);", re.S | re.I)
+    # Regex to find foreign key constraints
+    fk_pattern = re.compile(r"FOREIGN KEY\s+\((.*?)\)\s+REFERENCES\s+(\w+)\s*\((.*?)\)", re.I)
+
+    for match in table_pattern.finditer(ddl_content):
+        table_name = match.group(1)
+        columns_str = match.group(2)
+        
+        columns = []
+        # Simple split by comma, ignoring commas inside parentheses for data types like NUMERIC(10, 2)
+        for col_def in re.split(r',(?![^\(]*\))', columns_str):
+            col_def = col_def.strip()
+            if not col_def or col_def.lower().startswith(('primary key', 'foreign key', 'constraint')):
+                continue
+            
+            # Extract column name, trying to be robust against various definitions
+            parts = col_def.split()
+            col_name = parts[0].strip('"`')
+            col_type = parts[1] if len(parts) > 1 else ""
+            
+            # Check for primary key marker
+            is_pk = "PRIMARY KEY" in col_def.upper()
+            
+            columns.append({"name": col_name, "type": col_type, "is_pk": is_pk})
+        
+        tables[table_name] = columns
+
+        # Find foreign keys within the table definition
+        for fk_match in fk_pattern.finditer(columns_str):
+            from_col = fk_match.group(1).strip()
+            to_table = fk_match.group(2).strip()
+            to_col = fk_match.group(3).strip()
+            relationships.append(f'    "{table_name}" --o| "{to_table}" : "{from_col} -> {to_col}"')
+
+    # Build Mermaid diagram string
+    mermaid_string = "erDiagram\n"
+    for table_name, columns in tables.items():
+        mermaid_string += f'    "{table_name}" {{\n'
+        for col in columns:
+            pk_label = " PK" if col["is_pk"] else ""
+            mermaid_string += f'        {col["type"]} {col["name"]}{pk_label}\n'
+        mermaid_string += '    }\n'
+    
+    mermaid_string += "\n".join(set(relationships)) # Use set to avoid duplicates
+
+    # HTML template to render the Mermaid diagram
+    html_template = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>数据库 E-R 图</title>
+        <script type="module">
+            import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+            mermaid.initialize({{ startOnLoad: true }});
+        </script>
+    </head>
+    <body>
+        <h1>数据库实体关系图 (E-R Diagram)</h1>
+        <div class="mermaid">
+            {mermaid_string}
+        </div>
+    </body>
+    </html>
+    """
+    
+    try:
+        # The output_path is now the full file path, so we get its parent directory
+        output_dir = os.path.dirname(output_path)
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Use the full path directly
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(textwrap.dedent(html_template))
+            
+        console.print(f"E-R 图已成功保存至 [green]{output_path}[/green]")
+        open_file(output_path)
+    except IOError as e:
+        console.print(f"[bold red]无法写入HTML文件: {e}[/bold red]")
 
 def print_results_table(df: pd.DataFrame):
     """Print the query results as a table in the console, limited to 10 rows."""

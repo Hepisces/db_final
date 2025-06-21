@@ -155,4 +155,18 @@ def reset_config():
         os.remove(CONFIG_FILE)
         console.print("[bold green]配置文件已删除。[/bold green]")
     else:
-        console.print(f"[yellow]未找到可删除的配置文件。[/yellow]") 
+        console.print(f"[yellow]未找到可删除的配置文件。[/yellow]")
+
+def get_table_names(db_name: str = DEFAULT_DB_NAME) -> list[str] | None:
+    """
+    Retrieves a list of all table names from the database.
+    """
+    try:
+        with create_connection(db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+            tables = [row[0] for row in cursor.fetchall()]
+            return tables
+    except sqlite3.Error as e:
+        console.print(f"[bold red]数据库错误: 无法获取表列表: {e}[/bold red]")
+        return None 

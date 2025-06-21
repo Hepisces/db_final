@@ -424,50 +424,124 @@ def run(
     db_name: str = typer.Option("project2025.db", "--db-name", help="要查询的数据库文件的名称。")
 ):
     """
-    执行SQL查询，检查其类型，并根据结果采取行动。
-    对于只读查询，它会显示结果、查询计划和可视化。
-    对于修改性查询（INSERT, UPDATE, DELETE），它需要管理员凭据。
+    执行SQL查询，显示结果、查询计划，并为SELECT查询生成可视化图表。
+
+    - **对于SELECT查询**: 同时显示查询计划、结果表格，并生成图表。
+    - **对于修改性查询 (INSERT, UPDATE, DELETE)**: 需要管理员权限 (`--user`, `--pass`)。
     """
-    console.print(f"正在执行查询: \"[cyan]{query}[/cyan]\"")
+    if not db.db_exists(db_name):
+        console.print(f"[bold yellow]警告: 数据库 '{db_name}' 不存在或为空。[/bold yellow]")
+        console.print("请先使用 `import-data` 命令导入数据。")
+        raise typer.Exit()
 
-    # When called programmatically from `ask`, db_name can be an OptionInfo object
-    if isinstance(db_name, OptionInfo):
-        effective_db_file = db_name.default
+    # Sanitize query by removing trailing semicolons
+    query = query.strip().rstrip(';')
+
+    # Check if it's a read-only query
+    is_read_only = visualizer.is_read_only_query(query)
+
+    if not is_read_only:
+        console.print("[bold yellow]警告: 这似乎是一个修改性查询。[/bold yellow]")
+        if not _is_admin(username, password):
+            console.print("[bold red]错误: 修改性查询需要管理员权限。请提供正确的 --user 和 --pass。[/bold red]")
+            raise typer.Exit(code=1)
+        console.print("[green]管理员权限验证通过。[/green]")
+
+    console.print(f"正在执行查询: [magenta]'{query}'[/magenta]...")
+
+    # For non-select queries, we just execute them
+    if not query.lower().strip().startswith("select"):
+        try:
+            with db.create_connection(db_name) as conn:
+                conn.execute(query)
+                conn.commit()
+                changes = conn.total_changes
+                console.print(f"[green]查询执行成功，影响了 {changes} 行。[/green]")
+        except sqlite3.Error as e:
+            console.print(f"[bold red]数据库错误: {e}[/bold red]")
+        return
+
+    # For SELECT queries, proceed with visualization
+    result_df, plan_df = db.execute_query(query, db_name=db_name)
+
+    if result_df is None:
+        console.print("[bold red]查询执行失败，无法继续。[/bold red]")
+        raise typer.Exit(code=1)
+
+    # 1. Draw Query Plan
+    if plan_df is not None and not plan_df.empty:
+        draw_query_plan(plan_df)
     else:
-        effective_db_file = db_name
+        console.print("[yellow]未能获取查询计划。[/yellow]")
 
-    # Check if the database exists and initialize if necessary
-    if not db.db_exists(effective_db_file):
-        console.print(f"[yellow]数据库 '{effective_db_file}' 不存在或为空。正在初始化...[/yellow]")
+    # 2. Print Results Table
+    print_results_table(result_df)
+
+    # 3. Visualize and Save Chart
+    if not result_df.empty:
+        # Create a safe filename from the query
+        safe_filename = "".join(c if c.isalnum() else "_" for c in query)[:50]
+        output_file = os.path.join(OUTPUT_DIR, f"{safe_filename}.png")
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+        visualizer.visualize_and_save(query, result_df, output_file)
+        open_file(output_file)
+    else:
+        console.print("[yellow]查询未返回数据，跳过图表生成。[/yellow]")
+
+@app.command()
+def tables(
+    db_name: str = typer.Option("project2025.db", "--db-name", help="要检查的数据库文件的名称。")
+):
+    """
+    列出数据库中所有的表。
+    """
+    if not db.db_exists(db_name):
+        console.print(f"[bold yellow]警告: 数据库 '{db_name}' 不存在或为空。[/bold yellow]")
+        console.print("请先使用 `import-data` 命令导入数据。")
+        return
+
+    console.print(f"正在从 [cyan]{db_name}[/cyan] 获取表列表...")
+    table_names = db.get_table_names(db_name)
+
+    if table_names is None:
+        console.print("[bold red]无法检索到表。[/bold red]")
         return
     
-    # 对非只读查询强制执行管理员检查
-    if not is_read_only_query(query):
-        console.print("[bold yellow]警告：此查询可能会修改数据库，需要管理员权限。[/bold yellow]")
-        
-        # 如果未通过命令行参数提供凭据，则提示用户输入
-        if username is None:
-            username = typer.prompt("请输入管理员用户名")
-        if password is None:
-            # Manually prompt for password since hide_input is not available on the option itself when None
-            password = typer.prompt("请输入管理员密码", hide_input=True)
+    if not table_names:
+        console.print("[yellow]数据库中没有找到任何表。[/yellow]")
+        return
 
-        if not _is_admin(username, password):
-            return  # 中止操作
+    table = Table(title=f"数据库 '{db_name}' 中的表", show_header=True, header_style="bold magenta")
+    table.add_column("序号", style="dim", width=6)
+    table.add_column("表名")
 
-    try:
-        console.print(f"正在执行查询: [bold white]'{query}'[/bold white] on [cyan]{effective_db_file}[/cyan]")
-        df, plan_df = db.execute_query(query, effective_db_file)
+    for i, name in enumerate(table_names):
+        table.add_row(str(i + 1), name)
+    
+    console.print(table)
 
-        if plan_df is not None:
-            visualizer.draw_query_plan(plan_df)
-        
-        if df is not None:
-            visualizer.print_results_table(df)
-            visualizer.visualize_query_result(df, query)
-            
-    except Exception as e:
-        console.print(f"[bold red]查询执行期间出错: {e}[/bold red]")
+@app.command()
+def er(
+    data_dir: Path = typer.Option(
+        "Smart_Home_DATA",
+        "--dir",
+        "-d",
+        help="包含DDL.sql文件的目录。",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
+):
+    """
+    从 DDL 文件生成并显示数据库的 E-R (实体-关系) 图。
+    """
+    ddl_path = data_dir / "DDL.sql"
+    output_path = Path(OUTPUT_DIR) / "er_diagram.html"
+    
+    console.print(f"正在从 [cyan]{ddl_path}[/cyan] 生成 E-R 图...")
+    visualizer.generate_er_diagram(str(ddl_path), str(output_path))
 
 @app.command()
 def import_data(
