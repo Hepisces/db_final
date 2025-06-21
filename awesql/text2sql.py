@@ -13,39 +13,38 @@ console = Console()
 # Ignore specific warnings from transformers
 warnings.filterwarnings("ignore", message=".*Torch was not compiled with flash attention.*")
 
-# Global cache for the model and tokenizer to avoid reloading
-_model_cache = {
-    "tokenizer": None,
-    "model": None
-}
+# 全局缓存，避免重复加载模型
+_model_cache = {}
 
-def load_model():
+def _load_model_and_tokenizer(model_path: str):
     """
-    Loads the SQLCoder model and tokenizer from a local path specified in the config,
-    with a fallback to a default path. Caches the model to avoid reloading.
+    从指定路径加载模型和分词器。
     """
-    if _model_cache["model"] and _model_cache["tokenizer"]:
-        console.print("[green]Model already loaded from cache.[/green]")
-        return _model_cache["tokenizer"], _model_cache["model"]
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            trust_remote_code=True
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            trust_remote_code=True,
+            torch_dtype=torch.float16,
+            device_map="auto",
+            use_cache=True,
+        )
+        return tokenizer, model
+    except Exception as e:
+        console.print(f"[bold red]加载模型 '{model_path}' 失败: {e}[/bold red]")
+        raise
 
-    console.print("[yellow]Loading SQLCoder model... (This might take a moment on first run)[/yellow]")
-    
-    config = db.load_config()
-    model_path = config.get('model_path')
-    using_default_path = False
-
-    if not model_path:
-        using_default_path = True
-        default_path_str = os.path.join("text2sql", "models--defog--sqlcoder-7b-2", "snapshots", "7e5b6f7981c0aa7d143f6bec6fa26625bdfcbe66")
-        console.print(f"[yellow]Warning: Model path not configured. Falling back to default path:[/yellow]")
-        console.print(f"  [dim]{default_path_str}[/dim]")
-        console.print(f"  [yellow]You can set a custom path with 'awesql config set-model-path'.[/yellow]")
-        model_path = default_path_str
-
+def _get_cached_model(model_path: str):
+    """
+    获取缓存的模型，如果不在缓存中则加载。
+    """
     if not model_path or not os.path.exists(model_path):
         raise FileNotFoundError(f"在路径 '{model_path}' 未找到模型。")
 
-    if not _model_cache.get(model_path):
+    if model_path not in _model_cache:
         console.print("[yellow]正在加载模型...这可能需要一些时间。[/yellow]")
         _model_cache[model_path] = _load_model_and_tokenizer(model_path)
         console.print("[green]模型已加载并缓存。[/green]")
