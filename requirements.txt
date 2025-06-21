@@ -1,0 +1,10 @@
+typer[all]
+pandas
+plotly
+kaleido
+sqlparse
+requests
+transformers
+torch
+sentencepiece
+accelerate 

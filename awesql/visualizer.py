@@ -1,34 +1,18 @@
-import typer
 import pandas as pd
-import sqlite3
-from contextlib import closing
-import os
-import random
-from datetime import datetime, timedelta
 import plotly.express as px
 import sqlparse
 import sys
 import subprocess
 import textwrap
+import os
+
 from rich.console import Console
 from rich.table import Table
 from rich.tree import Tree
-from rich.progress import track
 
-# Import refactored modules
-from . import db
-from . import visualizer
-
-# --- Adapter for Python 3.12+ sqlite3 datetime handling ---
-# This silences the DeprecationWarning by registering a modern adapter.
-sqlite3.register_adapter(datetime, lambda val: val.isoformat())
-
-app = typer.Typer()
 console = Console()
 
-DB_FILE = "visualization_demo.db"
-DATA_DIR = "Smart_Home_DATA"
-OUTPUT_DIR = "visulization/output"
+OUTPUT_DIR = "output"
 
 PLAN_EXPLANATIONS = {
     "SCAN": "全表扫描: 从头到尾读取表的每一行。对于大表，这可能效率不高。通常意味着没有使用索引。",
@@ -47,82 +31,7 @@ def get_explanation(detail_str: str) -> str:
         if keyword in detail_str:
             return f" [dim italic]({explanation})[/dim italic]"
     return ""
-
-# --- Database and Data Loading Logic ---
-
-def create_connection():
-    """Create a database connection to the SQLite database."""
-    return sqlite3.connect(DB_FILE)
-
-def create_tables(conn):
-    """Create tables based on the DDL.sql file."""
-    ddl_file_path = os.path.join(DATA_DIR, "DDL.sql")
-    console.print(f"Reading table schema from [cyan]{ddl_file_path}[/cyan]...")
-    try:
-        with open(ddl_file_path, 'r', encoding='utf-8') as f:
-            ddl_script = f.read()
-        with closing(conn.cursor()) as cursor:
-            cursor.executescript(ddl_script)
-        conn.commit()
-        console.print("[green]Tables created successfully.[/green]")
-    except FileNotFoundError:
-        console.print(f"[bold red]Error: DDL file not found at {ddl_file_path}. Cannot create tables.[/bold red]")
-        raise
-    except Exception as e:
-        console.print(f"[bold red]An error occurred while creating tables: {e}[/bold red]")
-        raise
-
-def import_real_data(conn):
-    """Import data from the real .sql files."""
-    cursor = conn.cursor()
     
-    # Order matters due to foreign keys
-    sql_files = ['customer.sql', 'devlist.sql', 'control.sql', 'devupdata.sql']
-    
-    console.print(f"[yellow]Starting data import from [bold]{DATA_DIR}[/bold]...[/yellow]")
-    
-    for file_name in sql_files:
-        file_path = os.path.join(DATA_DIR, file_name)
-        console.print(f"Processing [cyan]{file_path}[/cyan]...")
-        
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                # Use a progress bar for large files
-                for line in track(f, description=f"Importing {file_name}..."):
-                    # Clean up the line and execute
-                    sql_statement = line.strip()
-                    if sql_statement:
-                        # Remove the "public." schema prefix for SQLite compatibility
-                        sql_statement = sql_statement.replace("INSERT INTO public.", "INSERT INTO ")
-                        cursor.execute(sql_statement)
-            conn.commit()
-            console.print(f"[green]Successfully imported {file_name}.[/green]")
-        except FileNotFoundError:
-            console.print(f"[bold red]Error: File not found at {file_path}. Please check the path.[/bold red]")
-            raise
-        except Exception as e:
-            console.print(f"[bold red]An error occurred while importing {file_name}: {e}[/bold red]")
-            raise
-            
-    console.print("[bold green]All data has been successfully imported![/bold green]")
-
-def db_exists():
-    """Check if the database file exists and is not empty."""
-    if not os.path.exists(DB_FILE) or os.path.getsize(DB_FILE) == 0:
-        return False
-    # Further check if tables are populated
-    try:
-        conn = create_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM customer")
-        count = cursor.fetchone()[0]
-        conn.close()
-        return count > 0
-    except sqlite3.Error:
-        return False
-
-# --- CLI Visualization Logic ---
-
 def draw_query_plan(plan_df: pd.DataFrame):
     """Draw the query plan as a tree in the console using rich, with explanations."""
     console.print("\n[bold cyan]📊 Query Plan[/bold cyan]")
@@ -391,75 +300,4 @@ def infer_query_type(query, df):
         return "类别分布"
 
     # --- 4. Default to general query ---
-    return "一般查询"
-
-
-@app.command()
-def run(
-    query: str = typer.Argument(..., help="The SQL query to execute and visualize."),
-    output: str = typer.Option("visualization.png", "--output", "-o", help="Output file name for the visualization image.")
-):
-    """
-    Executes a SQL query, displays the plan and results in the terminal,
-    and saves a visualization as an image file.
-    """
-    if not db.db_exists():
-        console.print("[bold yellow]Warning: Database not found or is empty.[/bold yellow]")
-        console.print("Please run the [bold cyan]import-data[/bold cyan] command first to load data.")
-        return
-
-    console.print(f"[bold]Executing Query:[/bold] [white]{query}[/white]")
-    
-    try:
-        conn = db.create_connection()
-        
-        # 1. Query Plan
-        plan_df = pd.read_sql_query(f"EXPLAIN QUERY PLAN {query}", conn)
-        visualizer.draw_query_plan(plan_df)
-        
-        # 2. Query Results
-        result_df = pd.read_sql_query(query, conn)
-        visualizer.print_results_table(result_df)
-        
-        # 3. Visualization
-        if not result_df.empty:
-            visualizer.visualize_and_save(query, result_df, output)
-            
-    except sqlite3.Error as e:
-        console.print(f"[bold red]Database Error:[/bold red] {e}")
-    except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
-    finally:
-        if 'conn' in locals() and conn:
-            conn.close()
-
-@app.command()
-def import_data():
-    """
-    Creates a new database and imports data from the Smart_Home_DATA directory.
-    If the database already exists, this command will do nothing. Use reset-db first if needed.
-    """
-    if db.db_exists():
-        console.print("[yellow]Database already exists and contains data.[/yellow]")
-        console.print("To re-import, please run [bold cyan]reset-db[/bold cyan] first.")
-        return
-        
-    try:
-        conn = db.create_connection()
-        db.create_tables(conn)
-        db.import_real_data(conn)
-    except Exception as e:
-        console.print(f"[bold red]Import process failed: {e}[/bold red]")
-    finally:
-        if 'conn' in locals() and conn:
-            conn.close()
-
-@app.command()
-def reset_db():
-    """
-    Deletes the existing database file, allowing for a clean import.
-    """
-    db.reset_db()
-
-if __name__ == "__main__":
-    app() 
+    return "一般查询" 

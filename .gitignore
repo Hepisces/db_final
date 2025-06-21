@@ -5,6 +5,7 @@ text2sql/token.txt
 .DS_Store
 *.db
 Smart_Home_DATA/*
+*.egg-info
 # Generated database file
 visualization_demo.db
 *.db

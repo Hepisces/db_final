@@ -18,12 +18,17 @@ from rich.progress import track
 # Import refactored modules
 from . import db
 from . import visualizer
+from . import checker
+from . import text2sql
 
 # --- Adapter for Python 3.12+ sqlite3 datetime handling ---
 # This silences the DeprecationWarning by registering a modern adapter.
 sqlite3.register_adapter(datetime, lambda val: val.isoformat())
 
-app = typer.Typer()
+app = typer.Typer(
+    help="awesql: A powerful CLI to run, visualize, and check SQL queries.",
+    rich_markup_mode="markdown"
+)
 console = Console()
 
 DB_FILE = "visualization_demo.db"
@@ -393,6 +398,9 @@ def infer_query_type(query, df):
     # --- 4. Default to general query ---
     return "一般查询"
 
+def _is_admin(username: str, password: str) -> bool:
+    """Verifies admin credentials."""
+    return username == "admin" and password == "123"
 
 @app.command()
 def run(
@@ -400,16 +408,20 @@ def run(
     output: str = typer.Option("visualization.png", "--output", "-o", help="Output file name for the visualization image.")
 ):
     """
-    Executes a SQL query, displays the plan and results in the terminal,
-    and saves a visualization as an image file.
+    (Public) Executes a SQL query, displays plan/results, and saves a visualization.
+
+    This is the primary command for running SQL queries. It provides a comprehensive
+    analysis, including the query execution plan and a visual representation of the
+    results, which is automatically opened.
     """
     if not db.db_exists():
-        console.print("[bold yellow]Warning: Database not found or is empty.[/bold yellow]")
-        console.print("Please run the [bold cyan]import-data[/bold cyan] command first to load data.")
-        return
+        console.print("[bold yellow]Database 'project2025.db' not found or is empty.[/bold yellow]")
+        console.print("An admin must run the 'import-data' command first.")
+        raise typer.Exit(code=1)
 
     console.print(f"[bold]Executing Query:[/bold] [white]{query}[/white]")
     
+    conn = None  # Initialize conn to None
     try:
         conn = db.create_connection()
         
@@ -430,36 +442,115 @@ def run(
     except Exception as e:
         console.print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
     finally:
-        if 'conn' in locals() and conn:
+        if conn:
             conn.close()
 
 @app.command()
-def import_data():
+def import_data(
+    username: str = typer.Option(..., "--user", "-u", help="Admin username for this operation.", prompt=True),
+    password: str = typer.Option(..., "--pass", "-p", help="Admin password.", prompt=True, hide_input=True),
+    data_dir: str = typer.Argument("Smart_Home_DATA", help="Directory containing DDL.sql and data files.")
+):
     """
-    Creates a new database and imports data from the Smart_Home_DATA directory.
-    If the database already exists, this command will do nothing. Use reset-db first if needed.
+    (Admin Only) Creates 'project2025.db' and imports data from a directory.
+
+    This command initializes the database from a specified data directory. It requires
+    the directory to contain a `DDL.sql` file for the schema. Upon successful
+    import, it saves the directory path to be automatically used by the `ask` command.
     """
+    if not _is_admin(username, password):
+        console.print("[bold red]Authentication failed. Admin privileges required.[/bold red]")
+        raise typer.Exit(code=1)
+
     if db.db_exists():
-        console.print("[yellow]Database already exists and contains data.[/yellow]")
-        console.print("To re-import, please run [bold cyan]reset-db[/bold cyan] first.")
+        console.print("[yellow]Database 'project2025.db' already exists.[/yellow]")
+        console.print("To re-import, please run 'reset-db' first (Admin Only).")
         return
-        
+    
+    conn = None
     try:
         conn = db.create_connection()
-        db.create_tables(conn)
-        db.import_real_data(conn)
+        db.create_tables(conn, data_dir)
+        db.import_real_data(conn, data_dir)
+        # On success, save the data directory path for future use by 'ask'
+        db.save_config({'data_dir': os.path.abspath(data_dir)})
+    except FileNotFoundError:
+        console.print("[bold red]Import process failed because DDL.sql was not found.[/bold red]")
     except Exception as e:
         console.print(f"[bold red]Import process failed: {e}[/bold red]")
     finally:
-        if 'conn' in locals() and conn:
+        if conn:
             conn.close()
 
 @app.command()
-def reset_db():
+def reset_db(
+    username: str = typer.Option(..., "--user", "-u", help="Admin username for this operation.", prompt=True),
+    password: str = typer.Option(..., "--pass", "-p", help="Admin password.", prompt=True, hide_input=True)
+):
     """
-    Deletes the existing database file, allowing for a clean import.
+    (Admin Only) Deletes the existing 'project2025.db' database file.
+
+    This is a destructive operation that removes the database file, allowing for a clean
+    re-import. It also requires admin privileges.
     """
+    if not _is_admin(username, password):
+        console.print("[bold red]Authentication failed. Admin privileges required.[/bold red]")
+        raise typer.Exit(code=1)
     db.reset_db()
+
+@app.command()
+def check(
+    query: str = typer.Argument(..., help="The SQL query to check for correctness and get suggestions.")
+):
+    """
+    (Public) Checks an SQL query for correctness using an external AI service.
+
+    This command sends the provided SQL query to an AI for analysis. It returns
+    feedback on syntax errors and provides suggestions for correction.
+    """
+    console.print(f"[bold]Checking Query:[/bold] [white]{query}[/white]")
+    console.print("\n[yellow]正在请求AI检查，请稍候...[/yellow]")
+    
+    suggestion = checker.check_sql_query(query)
+    
+    console.print("\n[bold cyan]🤖 AI 分析结果:[/bold cyan]")
+    console.print(suggestion)
+
+@app.command()
+def ask(
+    question: str = typer.Argument(..., help="The natural language question to convert to SQL.")
+):
+    """
+    (Public) Converts a natural language question to an SQL query using a local AI model.
+
+    This command uses a local Text-to-SQL model to translate your question into an
+    SQL query. It **automatically** uses the database schema from the last successful
+    `import-data` command, so no schema file needs to be specified manually.
+    """
+    console.print(f"[bold]Question:[/bold] [white]{question}[/white]")
+    
+    config = db.load_config()
+    data_dir = config.get('data_dir')
+
+    if not data_dir:
+        console.print("[bold red]Error: No data source has been configured yet.[/bold red]")
+        console.print("Please ask an admin to run the `import-data` command first.")
+        raise typer.Exit(code=1)
+
+    schema_path = os.path.join(data_dir, "DDL.sql")
+    schema_content = ""
+    try:
+        with open(schema_path, 'r', encoding='utf-8') as f:
+            schema_content = f.read()
+        console.print(f"Automatically using schema from: [cyan]{schema_path}[/cyan]")
+    except FileNotFoundError:
+        console.print(f"[bold red]Error: Could not find 'DDL.sql' in the configured data source: '{data_dir}'[/bold red]")
+        raise typer.Exit(code=1)
+
+    sql_query = text2sql.generate_sql(question, schema_content)
+    
+    console.print("\n[bold green]🤖 Generated SQL Query:[/bold green]")
+    console.print(f"[white]{sql_query}[/white]")
 
 if __name__ == "__main__":
     app() 

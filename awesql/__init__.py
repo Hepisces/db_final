@@ -1,0 +1,1 @@
+# This file makes sql_visualizer a Python package. 

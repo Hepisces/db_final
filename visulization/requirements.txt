@@ -1,6 +1,0 @@
-typer
-rich
-pandas
-plotly>=6.1.1
-sqlparse
-kaleido 
