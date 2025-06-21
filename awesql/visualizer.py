@@ -13,35 +13,6 @@ console = Console()
 
 OUTPUT_DIR = "output"
 
-# 配置matplotlib支持中文字体
-def setup_chinese_font():
-    """配置matplotlib使用支持中文的字体"""
-    # macOS系统常见中文字体
-    chinese_fonts = ['PingFang SC', 'STHeiti', 'Heiti TC', 'Hiragino Sans GB', 'Microsoft YaHei', 'SimHei']
-    
-    # 尝试找到一个可用的中文字体
-    font_found = False
-    for font in chinese_fonts:
-        try:
-            # 检查字体是否可用
-            mpl.font_manager.findfont(font)
-            # 设置matplotlib使用该字体
-            plt.rcParams['font.family'] = font
-            console.print(f"[green]已设置图表使用 '{font}' 字体，支持中文显示。[/green]")
-            font_found = True
-            break
-        except:
-            continue
-    
-    if not font_found:
-        # 如果找不到中文字体，使用通用配置
-        plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Liberation Sans', 'sans-serif']
-        plt.rcParams['axes.unicode_minus'] = False  # 正确显示负号
-        console.print("[yellow]警告：未找到支持中文的字体，图表中的中文可能无法正确显示。[/yellow]")
-
-# 在导入时立即设置字体
-setup_chinese_font()
-
 PLAN_EXPLANATIONS = {
     "SCAN": "全表扫描: 从头到尾读取表的每一行。对于大表，这可能效率不高。通常意味着没有使用索引。",
     "SEARCH": "索引搜索: 使用索引来直接定位和读取满足条件的行子集，这通常比全表扫描快得多。",
@@ -305,7 +276,7 @@ def visualize_query_result(df: pd.DataFrame, query: str):
         elif choice == 3:
             categorical_cols = df.select_dtypes(exclude=['number']).columns.tolist()
             numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-
+    
             if not categorical_cols or not numeric_cols:
                 console.print("[bold red]错误：堆叠柱状图需要至少一个非数值列（作X轴）和至少一个数值列。[/bold red]")
                 plt.close(fig)
@@ -361,7 +332,7 @@ def visualize_query_result(df: pd.DataFrame, query: str):
             cat_col = _prompt_for_column(df[categorical_cols], "类别列 (X-axis)")
             if not cat_col:
                 plt.close(fig)
-                continue
+            continue
             
             num_col = _prompt_for_column(df[numeric_cols], "数值列 (Y-axis)")
             if not num_col:
