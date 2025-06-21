@@ -3,6 +3,7 @@ import sys
 import subprocess
 import os
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import seaborn as sns
 from rich.console import Console
 from rich.table import Table
@@ -11,6 +12,35 @@ from rich.tree import Tree
 console = Console()
 
 OUTPUT_DIR = "output"
+
+# 配置matplotlib支持中文字体
+def setup_chinese_font():
+    """配置matplotlib使用支持中文的字体"""
+    # macOS系统常见中文字体
+    chinese_fonts = ['PingFang SC', 'STHeiti', 'Heiti TC', 'Hiragino Sans GB', 'Microsoft YaHei', 'SimHei']
+    
+    # 尝试找到一个可用的中文字体
+    font_found = False
+    for font in chinese_fonts:
+        try:
+            # 检查字体是否可用
+            mpl.font_manager.findfont(font)
+            # 设置matplotlib使用该字体
+            plt.rcParams['font.family'] = font
+            console.print(f"[green]已设置图表使用 '{font}' 字体，支持中文显示。[/green]")
+            font_found = True
+            break
+        except:
+            continue
+    
+    if not font_found:
+        # 如果找不到中文字体，使用通用配置
+        plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Liberation Sans', 'sans-serif']
+        plt.rcParams['axes.unicode_minus'] = False  # 正确显示负号
+        console.print("[yellow]警告：未找到支持中文的字体，图表中的中文可能无法正确显示。[/yellow]")
+
+# 在导入时立即设置字体
+setup_chinese_font()
 
 PLAN_EXPLANATIONS = {
     "SCAN": "全表扫描: 从头到尾读取表的每一行。对于大表，这可能效率不高。通常意味着没有使用索引。",

@@ -517,7 +517,13 @@ def check(
     try:
         config = db.load_config()
         ddl_path = config.get("ddl_path")
-        result = checker.check_sql(query, ddl_path)
+
+        schema_content = ""
+        if ddl_path and os.path.exists(ddl_path):
+            with open(ddl_path, 'r', encoding='utf-8') as f:
+                schema_content = f.read()
+        
+        result = checker.check_sql_query(query, schema_content)
         console.print(f"\n[bold green]AI检查结果:[/bold green]\n{result}")
     except Exception as e:
         console.print(f"[bold red]SQL查询检查失败: {e}[/bold red]")
