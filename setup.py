@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-with open("requirements.txt") as f:
+with open("requirements.txt", encoding='utf-8') as f:
     required = f.read().splitlines()
 
 setup(
@@ -16,7 +16,7 @@ setup(
     },
     author="Jiawei He & Lufan Han & Yiran Yan",
     description="A command-line tool to execute SQL queries and visualize the results and execution plan.",
-    long_description=open('README.md').read(),
+    long_description=open('README.md', encoding='utf-8').read(),
     long_description_content_type="text/markdown",
     url="https://github.com/Hepisces/db_final",
 )
