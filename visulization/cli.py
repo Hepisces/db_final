@@ -209,9 +209,39 @@ def prepare_df_for_plotting(df: pd.DataFrame, category_col: str, metric_col: str
         return df_plot
     return df
 
+def try_convert_to_datetime(series: pd.Series) -> pd.Series | None:
+    """
+    Attempts to convert a pandas Series to datetime, trying multiple formats.
+    Handles standard datetime strings and numeric unix timestamps (s, ms, us, ns).
+    """
+    # 1. Try standard conversion first (for ISO formats etc.)
+    # Make a copy to avoid SettingWithCopyWarning
+    series_copy = series.copy()
+    converted_series = pd.to_datetime(series_copy, errors='coerce')
+    
+    if not pd.api.types.is_datetime64_any_dtype(converted_series) or converted_series.isnull().all():
+        # 2. If it fails or results in all NaT, and dtype is numeric, try unix timestamp conversion
+        if pd.api.types.is_numeric_dtype(series_copy):
+            # Check for plausible unix timestamp in nanoseconds, microseconds, or milliseconds.
+            # 1.6e18 (ns) is around 2020. A simple check for large numbers.
+            # We check the mean to avoid issues with a few outlier points.
+            if series_copy.mean() > 1e12: 
+                # Attempt conversion from nanoseconds, most likely for IoT data
+                converted_series = pd.to_datetime(series_copy, unit='ns', errors='coerce')
+            else: # Otherwise, assume seconds
+                converted_series = pd.to_datetime(series_copy, unit='s', errors='coerce')
+    
+    # Return the series only if the conversion was successful for at least one value
+    if pd.api.types.is_datetime64_any_dtype(converted_series) and not converted_series.isnull().all():
+        return converted_series
+    
+    return None
+
 def visualize_and_save(query: str, df: pd.DataFrame, output_file: str):
     """Infer query type, visualize results with a scientific style, and save to a file."""
-    query_type = infer_query_type(query, df)
+    query_type_info = infer_query_type(query, df)
+    query_type = query_type_info[0] if isinstance(query_type_info, tuple) else query_type_info
+    
     console.print(f"\n[bold cyan]🖼️  Result Visualization[/bold cyan]")
     console.print(f"Inferred query type: [bold]{query_type}[/bold]")
 
@@ -222,12 +252,62 @@ def visualize_and_save(query: str, df: pd.DataFrame, output_file: str):
     chart_title = textwrap.fill(query, width=80).replace('\n', '<br>')
 
     if query_type == "时间序列":
-        time_col = next((c for c in df.columns if 'time' in c.lower() or 'date' in c.lower()), None)
-        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-        if time_col and numeric_cols:
-            df[time_col] = pd.to_datetime(df[time_col])
-            fig = px.line(df.head(100), x=time_col, y=numeric_cols[0], title=chart_title, markers=True, template=plot_template)
-            
+        _, time_col, value_col = query_type_info
+        
+        # --- Smart Data Conversion ---
+        # 1. Convert time column to datetime and clean up
+        df[time_col] = try_convert_to_datetime(df[time_col])
+        df.dropna(subset=[time_col], inplace=True)
+        df = df.sort_values(by=time_col)
+
+        # 2. Attempt to convert value column to numeric
+        value_series_numeric = pd.to_numeric(df[value_col], errors='coerce')
+
+        # 3. Decide plotting strategy based on value column type
+        if not value_series_numeric.isnull().all(): # Case 1: Value column is NUMERIC
+            console.print(f"Plotting numeric time series: [cyan]'{time_col}'[/cyan] vs [cyan]'{value_col}'[/cyan].")
+            df['numeric_value'] = value_series_numeric
+            df_plot = df.dropna(subset=['numeric_value'])
+            if not df_plot.empty:
+                fig = px.line(df_plot, x=time_col, y='numeric_value', title=chart_title, markers=True, template=plot_template)
+                fig.update_yaxes(title_text=value_col) # Use original column name for y-axis title
+                
+                # Ensure X-axis shows proper datetime format
+                fig.update_xaxes(
+                    type='date',
+                    tickformat='%Y-%m-%d %H:%M:%S',
+                    title_text=time_col
+                )
+        
+        else: # Case 2: Value column is CATEGORICAL
+            console.print(f"Plotting categorical time series: [cyan]'{time_col}'[/cyan] vs [cyan]'{value_col}'[/cyan].")
+            df_plot = df.dropna(subset=[value_col])
+
+            if not df_plot.empty:
+                # Create a mapping from category to integer
+                categories = df_plot[value_col].astype(str).unique()
+                category_map = {cat: i for i, cat in enumerate(categories)}
+                
+                # Apply the mapping to create a numeric column for plotting
+                df_plot['numeric_value'] = df_plot[value_col].map(category_map)
+                
+                # Use a step chart (line_shape='hv') for clearer state transitions
+                fig = px.line(df_plot, x=time_col, y='numeric_value', title=chart_title, markers=True, template=plot_template, line_shape='hv')
+                
+                # Update the y-axis to show the original string labels instead of numbers
+                fig.update_yaxes(
+                    tickvals=list(category_map.values()),
+                    ticktext=list(category_map.keys()),
+                    title_text=value_col
+                )
+                
+                # Ensure X-axis shows proper datetime format
+                fig.update_xaxes(
+                    type='date',
+                    tickformat='%Y-%m-%d %H:%M:%S',
+                    title_text=time_col
+                )
+
     elif query_type in ["聚合分析", "类别分布"]:
         numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
         categorical_cols = df.select_dtypes(exclude=['number']).columns.tolist()
@@ -259,16 +339,54 @@ def visualize_and_save(query: str, df: pd.DataFrame, output_file: str):
         console.print("[yellow]No suitable visualization generated for this query type.[/yellow]")
 
 def infer_query_type(query, df):
-    """Infer query type to select a suitable visualization method."""
-    # (This function is largely the same as the one in app.py)
+    """
+    Infer query type to select a suitable visualization method.
+    This version is more robust and attempts to parse date-like strings and numeric timestamps.
+    Returns a tuple: (query_type, col1_name, col2_name) for plottable types.
+    """
     formatted_query = sqlparse.format(query.strip(), keyword_case='upper')
-    time_cols = [c for c in df.columns if 'time' in c.lower() or 'date' in c.lower()]
-    if any(pd.api.types.is_datetime64_any_dtype(df[c]) for c in df.columns if c in time_cols):
-        return "时间序列"
-    if 'GROUP BY' in formatted_query or any(f in formatted_query for f in ['COUNT(', 'SUM(', 'AVG(']):
-        return "聚合分析"
+    
+    # --- 1. First check for Aggregation/Categorical queries by SQL syntax ---
+    # This takes precedence over time series detection
+    has_aggregation = ('GROUP BY' in formatted_query or 
+                      any(f in formatted_query for f in ['COUNT(', 'SUM(', 'AVG(', 'MIN(', 'MAX(']))
+    
+    if has_aggregation:
+        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        categorical_cols = df.select_dtypes(exclude=['number']).columns.tolist()
+        
+        if numeric_cols and categorical_cols:
+            console.print("Query contains GROUP BY or aggregation functions. Treating as aggregation analysis.")
+            return "聚合分析"
+    
+    # --- 2. Check for Time Series ---
+    # Skip columns that are clearly aggregation results
+    skip_columns = [col for col in df.columns if any(agg in col.lower() for agg in 
+                   ['count(', 'sum(', 'avg(', 'min(', 'max(', 'count', 'sum', 'avg'])]
+    
+    # Find a time column
+    time_col_name = None
+    for col_name in df.columns:
+        # Skip aggregation result columns for time detection
+        if col_name in skip_columns:
+            continue
+            
+        if try_convert_to_datetime(df[col_name]) is not None:
+            time_col_name = col_name
+            break
+            
+    if time_col_name:
+        # Found a time column. Find a suitable value column that is not the time column.
+        value_cols = [col for col in df.columns if col != time_col_name]
+        if value_cols:
+            console.print(f"Found time column: '{time_col_name}'. Treating as time series.")
+            return "时间序列", time_col_name, value_cols[0]
+
+    # --- 3. Check for simple categorical distributions ---
     if len(df.columns) == 2 and pd.api.types.is_numeric_dtype(df.iloc[:, 1]):
         return "类别分布"
+
+    # --- 4. Default to general query ---
     return "一般查询"
 
 

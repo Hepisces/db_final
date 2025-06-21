@@ -3,6 +3,7 @@ text2sql/.DS_Store
 text2sql/models--defog--sqlcoder-7b-2
 text2sql/token.txt
 .DS_Store
+*.db
 Smart_Home_DATA/*
 # Generated database file
 visualization_demo.db
