@@ -1,35 +1,55 @@
-# SQL Query Visualization Demo
+# SQL Query Visualization CLI
 
-This demo provides an interactive web application to visualize SQL queries on a sample smart home database.
+This is a command-line tool to execute and visualize SQL queries on a sample smart home database.
 
 It allows you to:
-- Execute arbitrary SQL queries against a pre-defined schema.
-- View the SQLite query plan visualized as a graph.
-- See the query results in a table.
-- Get intelligent visualizations (time-series charts, bar/pie charts) for specific query types.
+- Execute an SQL query from your terminal.
+- View the query execution plan rendered as a tree directly in your console.
+- See the query results formatted as a clean table.
+- Save a graphical visualization of the results (e.g., bar chart, line chart) as an image file.
 
-## How to Run
+## How to Use
 
-1.  **Install Dependencies:**
-    Make sure you have Python 3.7+ installed. Then, install the required packages using pip:
-    ```bash
-    pip install -r requirements.txt
-    ```
-    You also need to install Graphviz on your system if you haven't already.
-    - **On macOS (using Homebrew):**
-      ```bash
-      brew install graphviz
-      ```
-    - **On Debian/Ubuntu:**
-      ```bash
-      sudo apt-get install graphviz
-      ```
+### 1. Installation
 
-2.  **Run the Streamlit App:**
-    Navigate to the `visulization` directory in your terminal and run the following command:
-    ```bash
-    streamlit run app.py
-    ```
+First, ensure you have Python 3.7+ installed. Then, install the required packages using pip:
 
-3.  **Open in Browser:**
-    Your browser should automatically open a new tab with the application running. If not, the terminal will provide a local URL (usually `http://localhost:8501`) that you can open manually. 
+```bash
+# It is recommended to use a virtual environment
+pip install -r requirements.txt
+```
+
+### 2. Running a Query
+
+To run the tool, use the `python visulization/cli.py` command, followed by the SQL query you want to execute, enclosed in quotes.
+
+#### Basic Example:
+
+This command will query the number of devices in each area.
+
+```bash
+python visulization/cli.py "SELECT area, COUNT(did) as device_count FROM devlist GROUP BY area"
+```
+
+**Output:**
+
+You will see the following in your terminal:
+1.  **Query Plan**: A tree structure showing how the database will execute the query.
+2.  **Query Results**: A table with the areas and their corresponding device counts.
+3.  **Visualization Confirmation**: A message indicating that a chart has been saved as `visualization.png`.
+
+#### Specifying Output File
+
+You can specify a different name for the output image using the `-o` or `--output` option.
+
+```bash
+python visulization/cli.py "SELECT type, COUNT(did) FROM devlist GROUP BY type" -o device_types.png
+```
+This will save the resulting bar chart to a file named `device_types.png`.
+
+#### Time-Series Example
+
+```bash
+python visulization/cli.py "SELECT did, time, data FROM control WHERE did = 'device_001' AND time > datetime('now', '-1 day')" -o device_001_activity.png
+```
+This will generate a line chart showing the activity for `device_001` over the last day. 
