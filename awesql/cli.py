@@ -27,14 +27,11 @@ from . import text2sql
 sqlite3.register_adapter(datetime, lambda val: val.isoformat())
 
 app = typer.Typer(
-    help="awesql: A powerful CLI to run, visualize, and check SQL queries.",
+    name="awesql",
+    help="一个用于数据库交互、查询、可视化和AI辅助的强大CLI工具。",
     rich_markup_mode="markdown"
 )
-config_app = typer.Typer(
-    help="Manage tool configuration (e.g., model and DDL file paths).",
-    name="config",
-    rich_markup_mode="markdown"
-)
+config_app = typer.Typer(name="config", help="管理AI功能的配置，如模型和DDL文件路径。")
 app.add_typer(config_app)
 console = Console()
 
@@ -405,235 +402,209 @@ def infer_query_type(query, df):
     # --- 4. Default to general query ---
     return "一般查询"
 
-def _is_admin(username: str, password: str) -> bool:
-    """Verifies admin credentials."""
-    return username == "admin" and password == "123"
+def _is_admin(username, password):
+    """
+    检查管理员凭据。
+    优先使用环境变量，如果未设置则回退到默认值。
+    """
+    admin_user = os.environ.get("AWESQL_ADMIN_USER", "admin")
+    admin_pass = os.environ.get("AWESQL_ADMIN_PASS", "123")
+    if username == admin_user and password == admin_pass:
+        return True
+    console.print("[bold red]认证失败，请检查您的用户名和密码。[/bold red]")
+    return False
 
 @app.command()
 def run(
-    query: str = typer.Argument(..., help="The SQL query to execute and visualize."),
-    output: str = typer.Option("visualization.png", "--output", "-o", help="Output file name for the visualization image.")
+    query: str = typer.Argument(..., help="要执行和可视化的SQL查询。"),
+    username: str = typer.Option(None, "--user", "-u", help="执行修改性查询所需的管理员用户名。"),
+    password: str = typer.Option(None, "--pass", "-p", help="执行修改性查询所需的管理员密码。", hide_input=True)
 ):
     """
-    (Public) Executes a SQL query, displays plan/results, and saves a visualization.
-
-    This is the primary command for running SQL queries. It provides a comprehensive
-    analysis, including the query execution plan and a visual representation of the
-    results, which is automatically opened.
+    执行SQL查询，显示结果/计划，并提供交互式可视化。
+    如果查询可能修改数据，则需要管理员权限。
     """
     if not db.db_exists():
-        console.print("[bold yellow]Database 'project2025.db' not found or is empty.[/bold yellow]")
-        console.print("An admin must run the 'import-data' command first.")
-        raise typer.Exit(code=1)
-
-    console.print(f"[bold]Executing Query:[/bold] [white]{query}[/white]")
+        console.print("[bold yellow]数据库不存在或为空，请先运行 `awesql import-data`。[/bold yellow]")
+        return
     
-    conn = None  # Initialize conn to None
+    # 对非只读查询强制执行管理员检查
+    if not is_read_only_query(query):
+        console.print("[bold yellow]警告：此查询可能会修改数据库，需要管理员权限。[/bold yellow]")
+        
+        # 如果未通过命令行参数提供凭据，则提示用户输入
+        if username is None:
+            username = typer.prompt("请输入管理员用户名")
+        if password is None:
+            # Manually prompt for password since hide_input is not available on the option itself when None
+             password = typer.prompt("请输入管理员密码", hide_input=True)
+
+        if not _is_admin(username, password):
+            return  # 中止操作
+
     try:
-        conn = db.create_connection()
+        console.print(f"正在执行查询: [bold white]'{query}'[/bold white]")
+        df, plan_df = db.execute_query(query)
+
+        if plan_df is not None:
+            visualizer.draw_query_plan(plan_df)
         
-        # 1. Query Plan
-        plan_df = pd.read_sql_query(f"EXPLAIN QUERY PLAN {query}", conn)
-        visualizer.draw_query_plan(plan_df)
-        
-        # 2. Query Results
-        result_df = pd.read_sql_query(query, conn)
-        visualizer.print_results_table(result_df)
-        
-        # 3. Visualization
-        if not result_df.empty:
-            visualizer.visualize_and_save(query, result_df, output)
+        if df is not None:
+            visualizer.print_results_table(df)
+            visualizer.visualize_query_result(df, query)
             
-    except sqlite3.Error as e:
-        console.print(f"[bold red]Database Error:[/bold red] {e}")
     except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
-    finally:
-        if conn:
-            conn.close()
+        console.print(f"[bold red]查询执行期间出错: {e}[/bold red]")
 
 @app.command()
 def import_data(
-    username: str = typer.Option(..., "--user", "-u", help="Admin username for this operation.", prompt=True),
-    password: str = typer.Option(..., "--pass", "-p", help="Admin password.", prompt=True, hide_input=True)
+    data_dir: Path = typer.Option(
+        "Smart_Home_DATA", 
+        "--dir", 
+        "-d", 
+        help="包含DDL.sql和数据文件的目录。默认为 'Smart_Home_DATA'。",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
 ):
     """
-    (Admin Only) Creates 'project2025.db' and imports data.
-
-    This command uses the DDL path from the configuration to initialize the database.
-    Please set the DDL path first using 'awesql config set-ddl-path'. The tool
-    will automatically find data files (`.sql`) in the same directory as the DDL file.
+    将SQL文件中的数据导入新数据库。
+    此命令在导入前会重置数据库。
     """
-    if not _is_admin(username, password):
-        console.print("[bold red]Authentication failed. Admin privileges required.[/bold red]")
-        raise typer.Exit(code=1)
-
-    config = db.load_config()
-    ddl_path = config.get('ddl_path')
-
-    if not ddl_path:
-        console.print("[bold red]Error: DDL path not configured.[/bold red]")
-        console.print("Please set the path to your DDL.sql file by running:")
-        console.print("  [bold cyan]awesql config set-ddl-path /path/to/your/DDL.sql[/bold cyan]")
-        raise typer.Exit(code=1)
+    db.reset_db()
     
-    data_dir = str(Path(ddl_path).parent)
-
-    if db.db_exists():
-        console.print("[yellow]Database 'project2025.db' already exists.[/yellow]")
-        console.print("To re-import, please run 'reset-db' first (Admin Only).")
-        return
-    
-    conn = None
     try:
-        conn = db.create_connection()
-        db.create_tables(conn, data_dir)
-        db.import_real_data(conn, data_dir)
-    except FileNotFoundError:
-        console.print(f"[bold red]Import process failed. Ensure 'DDL.sql' exists at the configured path:[/bold red] {ddl_path}")
+        with db.create_connection() as conn:
+            if not db.create_tables(conn, str(data_dir)):
+                console.print("[bold red]创建数据库表失败，导入中止。[/bold red]")
+                return
+            db.import_real_data(conn, str(data_dir))
+        console.print("[bold green]所有数据已成功导入。[/bold green]")
     except Exception as e:
-        console.print(f"[bold red]Import process failed: {e}[/bold red]")
-    finally:
-        if conn:
-            conn.close()
+        console.print(f"[bold red]数据导入期间出错: {e}[/bold red]")
 
 @app.command()
 def reset_db(
-    username: str = typer.Option(..., "--user", "-u", help="Admin username for this operation.", prompt=True),
-    password: str = typer.Option(..., "--pass", "-p", help="Admin password.", prompt=True, hide_input=True)
+    username: str = typer.Option(..., "--user", "-u", help="管理员用户名。", prompt=True),
+    password: str = typer.Option(..., "--pass", "-p", help="管理员密码。", prompt=True, hide_input=True)
 ):
-    """
-    (Admin Only) Deletes the existing 'project2025.db' database file.
-
-    This is a destructive operation that removes the database file, allowing for a clean
-    re-import. It also requires admin privileges.
-    """
+    """(仅限管理员) 删除现有数据库文件以重新开始。"""
     if not _is_admin(username, password):
-        console.print("[bold red]Authentication failed. Admin privileges required.[/bold red]")
-        raise typer.Exit(code=1)
-    db.reset_db()
+        return
+    try:
+        db.reset_db()
+        # 成功删除数据库后，询问是否删除配置文件
+        if os.path.exists(db.CONFIG_FILE):
+            delete_config = typer.confirm(
+                "数据库已删除。您是否也想删除配置文件 'awesql_config.json'？"
+            )
+            if delete_config:
+                db.reset_config()
+    except Exception as e:
+        console.print(f"[bold red]重置数据库时出错: {e}[/bold red]")
 
 @app.command()
 def check(
-    query: str = typer.Argument(..., help="The SQL query to check for correctness and get suggestions.")
+    query: str = typer.Argument(..., help="要检查正确性的SQL查询。")
 ):
-    """
-    (Public) Checks an SQL query for correctness using an external AI service.
-
-    This command sends the provided SQL query to an AI for analysis. It returns
-    feedback on syntax errors and provides suggestions for correction. It automatically
-    uses the database schema from the DDL path set in the configuration.
-    """
-    console.print(f"[bold]Checking Query:[/bold] [white]{query}[/white]")
-    
-    config = db.load_config()
-    ddl_path = config.get('ddl_path')
-
-    schema_content = ""
-    if ddl_path:
-        try:
-            with open(ddl_path, 'r', encoding='utf-8') as f:
-                schema_content = f.read()
-            console.print(f"Automatically using schema from configured path: [cyan]{ddl_path}[/cyan]")
-        except FileNotFoundError:
-            console.print(f"[yellow]Warning: Could not find file at the configured DDL path '{ddl_path}'. Checking query without schema context.[/yellow]")
-    else:
-        console.print("[yellow]Warning: DDL path not configured. Checking query without schema context.[/yellow]")
-        console.print("[yellow]For better results, set it via 'awesql config set-ddl-path'.[/yellow]")
-
-
-    console.print("\n[yellow]正在请求AI检查，请稍候...[/yellow]")
-    
-    suggestion = checker.check_sql_query(query, schema_content)
-    
-    console.print("\n[bold cyan]🤖 AI 分析结果:[/bold cyan]")
-    console.print(suggestion)
+    """使用AI助手检查所提供SQL查询的正确性。"""
+    console.print("正在检查SQL查询...")
+    try:
+        config = db.load_config()
+        ddl_path = config.get("ddl_path")
+        result = checker.check_sql(query, ddl_path)
+        console.print(f"\n[bold green]AI检查结果:[/bold green]\n{result}")
+    except Exception as e:
+        console.print(f"[bold red]SQL查询检查失败: {e}[/bold red]")
 
 @app.command()
 def ask(
-    question: str = typer.Argument(..., help="The natural language question to convert to SQL.")
+    question: str = typer.Argument(..., help="要转换为SQL的自然语言问题。")
 ):
-    """
-    (Public) Converts a natural language question to an SQL query using a local AI model.
-
-    This command uses a local Text-to-SQL model to translate your question into an
-    SQL query. It **automatically** uses the database schema from the configured
-    DDL path. Please set both model and DDL paths first using the 'config' command.
-    """
-    console.print(f"[bold]Question:[/bold] [white]{question}[/white]")
-    
+    """将自然语言问题翻译成SQL查询。"""
+    console.print(f"正在根据您的问题生成SQL: \"[cyan]{question}[/cyan]\"")
     config = db.load_config()
-    ddl_path = config.get('ddl_path')
+    
+    ddl_path = config.get("ddl_path")
+    if not ddl_path or not os.path.exists(ddl_path):
+        console.print("[bold red]错误：DDL文件路径未配置或无效。[/bold red]")
+        console.print("请运行 `awesql config set-ddl-path /path/to/your/DDL.sql` 进行设置。")
+        return
 
-    if not ddl_path:
-        console.print("[bold red]Error: DDL path not configured.[/bold red]")
-        console.print("Please set the path to your DDL.sql file by running:")
-        console.print("  [bold cyan]awesql config set-ddl-path /path/to/your/DDL.sql[/bold cyan]")
-        raise typer.Exit(code=1)
-
-    schema_content = ""
+    model_path = config.get("model_path")
+    if not model_path:
+        console.print("[bold red]错误：本地模型路径未配置。[/bold red]")
+        console.print("请运行 `awesql config set-model-path /path/to/your/model`进行设置。")
+        return
+        
     try:
-        with open(ddl_path, 'r', encoding='utf-8') as f:
-            schema_content = f.read()
-        console.print(f"Automatically using schema from configured path: [cyan]{ddl_path}[/cyan]")
-    except FileNotFoundError:
-        console.print(f"[bold red]Error: Could not find file at the configured DDL path: '{ddl_path}'[/bold red]")
-        raise typer.Exit(code=1)
+        sql_query = text2sql.generate_sql(question, ddl_path, model_path)
+        if sql_query:
+            console.print(f"\n[bold green]生成的SQL查询:[/bold green]\n[white on black]{sql_query}[/white on black]")
+            if typer.confirm("您想立即执行此查询吗?"):
+                run(sql_query)
+    except Exception as e:
+        console.print(f"[bold red]文本到SQL转换期间出错: {e}[/bold red]")
 
-    sql_query = text2sql.generate_sql(question, schema_content)
-    
-    console.print("\n[bold green]🤖 Generated SQL Query:[/bold green]")
-    console.print(f"[white]{sql_query}[/white]")
-
-@config_app.command("set-model-path")
+@config_app.command(name="set-model-path")
 def set_model_path(
-    path: Path = typer.Argument(..., help="The absolute path to the local Hugging Face model directory.")
+    path: Path = typer.Argument(
+        ..., 
+        help="本地HuggingFace模型目录的绝对路径。",
+        exists=True, 
+        file_okay=False, 
+        dir_okay=True,
+        resolve_path=True
+    )
 ):
-    """
-    Sets and saves the path to your local SQLCoder model directory.
-    """
-    if not path.is_dir():
-        console.print(f"[bold red]Error: The provided path is not a valid directory.[/bold red]")
-        console.print(f"Path provided: '{path}'")
-        raise typer.Exit(code=1)
-
+    """Sets and saves the local model path for the 'ask' command."""
     config = db.load_config()
-    model_path_str = str(path.resolve())
-    config['model_path'] = model_path_str
+    config["model_path"] = str(path)
     db.save_config(config)
-    console.print(f"✅ Model path successfully set to: [cyan]{model_path_str}[/cyan]")
+    console.print(f"[green]模型路径已设为: [cyan]{path}[/cyan][/green]")
 
-@config_app.command("set-ddl-path")
+@config_app.command(name="set-ddl-path")
 def set_ddl_path(
-    path: Path = typer.Argument(..., help="The absolute or relative path to your 'DDL.sql' file.")
+    path: Path = typer.Argument(
+        ..., 
+        help="用于AI辅助的DDL.sql文件的绝对路径。",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        resolve_path=True,
+    )
 ):
-    """
-    Sets and saves the path to your DDL.sql file for data import and analysis.
-    The tool will look for data files (`.sql`) in the same directory as this file.
-    """
-    if not path.is_file():
-        console.print(f"[bold red]Error: The provided path is not a valid file.[/bold red]")
-        raise typer.Exit(code=1)
-
+    """Sets and saves the DDL file path for AI-powered commands."""
     config = db.load_config()
-    ddl_path_str = str(path.resolve())
-    config['ddl_path'] = ddl_path_str
+    config["ddl_path"] = str(path)
     db.save_config(config)
-    console.print(f"✅ DDL file path successfully set to: [cyan]{ddl_path_str}[/cyan]")
+    console.print(f"[green]DDL文件路径已设为: [cyan]{path}[/cyan][/green]")
 
-@config_app.command("show")
+@config_app.command(name="show")
 def show_config():
-    """
-    Displays the current configuration, including model and DDL paths.
-    """
+    """Displays the current configuration."""
     config = db.load_config()
     if not config:
-        console.print("[yellow]No configuration found. Please run 'import-data' or 'config set-model-path' to create one.[/yellow]")
+        console.print("[yellow]未找到配置文件。请使用 `set-model-path` 或 `set-ddl-path` 创建。[/yellow]")
         return
     
-    console.print("[bold cyan]Current `awesql` Configuration:[/bold cyan]")
-    for key, value in sorted(config.items()):
-        console.print(f"  [green]{key}[/green]: {value}")
+    console.print("[bold]当前配置:[/bold]")
+    for key, value in config.items():
+        console.print(f"  [cyan]{key}[/cyan]: {value}")
+
+# --- Utility Functions ---
+def is_read_only_query(query: str) -> bool:
+    """
+    使用 sqlparse 检查查询是否只包含 SELECT 语句。
+    """
+    parsed = sqlparse.parse(query)
+    for statement in parsed:
+        # get_type() 返回语句的类型: 'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'UNKNOWN'
+        if statement.get_type() != 'SELECT':
+            return False
+    return True
 
 if __name__ == "__main__":
     app() 

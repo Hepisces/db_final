@@ -3,6 +3,7 @@ import torch
 import os
 import warnings
 from rich.console import Console
+import time
 
 # Import db module to access config functions
 from . import db
@@ -41,72 +42,58 @@ def load_model():
         console.print(f"  [yellow]You can set a custom path with 'awesql config set-model-path'.[/yellow]")
         model_path = default_path_str
 
-    try:
-        if not os.path.isdir(model_path):
-            console.print(f"[bold red]Error: Model path is not a valid directory.[/bold red]")
-            if using_default_path:
-                console.print(f"Default path not found: '{os.path.abspath(model_path)}'")
-                console.print("Please make sure the model exists at the default location or set a custom path.")
-            else:
-                console.print(f"Path from config: '{model_path}'")
-                console.print("Please set a correct path using 'awesql config set-model-path'.")
-            return None, None
+    if not model_path or not os.path.exists(model_path):
+        raise FileNotFoundError(f"在路径 '{model_path}' 未找到模型。")
 
-        console.print(f"Loading model from path: [cyan]{model_path}[/cyan]")
+    if not _model_cache.get(model_path):
+        console.print("[yellow]正在加载模型...这可能需要一些时间。[/yellow]")
+        _model_cache[model_path] = _load_model_and_tokenizer(model_path)
+        console.print("[green]模型已加载并缓存。[/green]")
+    else:
+        console.print("[green]正在使用缓存的模型。[/green]")
         
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_path,
-            trust_remote_code=True,
-            local_files_only=True
-        )
-        
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-        
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            torch_dtype=torch.float16,
-            trust_remote_code=True,
-            device_map="auto",
-            local_files_only=True,
-            use_flash_attention_2=False,
-            low_cpu_mem_usage=True
-        )
-        
-        model.config.pad_token_id = tokenizer.pad_token_id
-        model.eval()
-        
-        # Cache the model and tokenizer
-        _model_cache["tokenizer"] = tokenizer
-        _model_cache["model"] = model
-        
-        console.print("[bold green]✅ Model loaded successfully![/bold green]")
-        return tokenizer, model
-        
-    except Exception as e:
-        console.print(f"[bold red]❌ Model loading failed: {e}[/bold red]")
-        return None, None
+    return _model_cache[model_path]
 
-def generate_sql(question: str, schema: str = "") -> str:
+def generate_sql(question: str, ddl_path: str, model_path: str) -> str:
     """
     Generates SQL from a natural language question using the loaded SQLCoder model.
     """
-    tokenizer, model = load_model()
-    
-    if not tokenizer or not model:
-        return "Model not loaded correctly. Cannot generate SQL."
-    
-    prompt = f"### Task\nGenerate a SQL query to answer this question: {question}\n\n"
-    if schema:
-        prompt += f"### Database Schema\n{schema}\n\n"
-    prompt += "### SQL\n"
-    
     try:
-        inputs = tokenizer(
-            prompt,
-            return_tensors="pt",
-            return_attention_mask=True
-        )
+        with open(ddl_path, 'r', encoding='utf-8') as f:
+            ddl = f.read()
+    except FileNotFoundError:
+        return f"错误：DDL 文件 '{ddl_path}' 未找到。"
+
+    try:
+        tokenizer, model = _get_cached_model(model_path)
+    except FileNotFoundError as e:
+        return str(e)
+
+    prompt = f"""### Instructions:
+Your task is to convert a question into a SQL query, given a database schema.
+Adhere to these rules:
+- **Deliberately go through the question and database schema word by word** to appropriately answer the question.
+- **Use Table Aliases** to prevent ambiguity. For example, `SELECT table1.col1, table2.col2 FROM table1 JOIN table2 ON table1.id = table2.id`.
+- When creating a ratio, always cast the numerator as `REAL` or `FLOAT` to ensure precision.
+
+### Input:
+Generate a SQL query that answers the following question:
+`{question}`
+
+### Database Schema:
+This is the schema of the database:
+```sql
+{ddl}
+```
+
+### Response:
+```sql
+"""
+    console.print("正在生成SQL查询...")
+    try:
+        start_time = time.time()
+        
+        inputs = tokenizer(prompt, return_tensors="pt")
         
         device = next(model.parameters()).device
         inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -122,12 +109,19 @@ def generate_sql(question: str, schema: str = "") -> str:
                 num_return_sequences=1
             )
         
-        full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        generated_sql = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        # Clean up the output to only get the SQL
+        if "```sql" in generated_sql:
+            generated_sql = generated_sql.split("```sql")[1]
+        if "```" in generated_sql:
+            generated_sql = generated_sql.split("```")[0]
         
-        # Extract only the generated SQL part
-        sql_part = full_response.split("### SQL")[-1].strip()
-        return sql_part
-        
+        generated_sql = generated_sql.strip()
+
+        end_time = time.time()
+        console.print(f"[green]在 {end_time - start_time:.2f} 秒内生成SQL。[/green]")
+        return generated_sql
+
     except Exception as e:
-        console.print(f"[bold red]An error occurred during SQL generation: {e}[/bold red]")
-        return "Failed to generate SQL." 
+        console.print(f"[bold red]生成SQL失败: {e}[/bold red]")
+        return "" 

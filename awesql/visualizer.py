@@ -1,11 +1,9 @@
 import pandas as pd
-import plotly.express as px
-import sqlparse
 import sys
 import subprocess
-import textwrap
 import os
-
+import matplotlib.pyplot as plt
+import seaborn as sns
 from rich.console import Console
 from rich.table import Table
 from rich.tree import Tree
@@ -103,201 +101,193 @@ def print_results_table(df: pd.DataFrame):
         
     console.print(table)
 
-def prepare_df_for_plotting(df: pd.DataFrame, category_col: str, metric_col: str, limit: int = 15) -> pd.DataFrame:
-    """Limit the number of categories for plotting, grouping the rest into 'Other'."""
-    if len(df) > limit:
-        console.print(f"[yellow]Chart has {len(df)} categories. Displaying top {limit - 1} and aggregating the rest into 'Other'.[/yellow]")
-        df_sorted = df.sort_values(by=metric_col, ascending=False)
-        
-        df_top = df_sorted.head(limit - 1)
-        df_other = df_sorted.iloc[limit - 1:]
-        
-        if not df_other.empty:
-            other_sum = df_other[metric_col].sum()
-            other_row = pd.DataFrame([{category_col: 'Other', metric_col: other_sum}])
-            df_plot = pd.concat([df_top, other_row], ignore_index=True)
-        else:
-            df_plot = df_top # Should not happen if len > limit but as a safeguard
-            
-        return df_plot
-    return df
-
-def try_convert_to_datetime(series: pd.Series) -> pd.Series | None:
+def visualize_query_result(df: pd.DataFrame, query: str):
     """
-    Attempts to convert a pandas Series to datetime, trying multiple formats.
-    Handles standard datetime strings and numeric unix timestamps (s, ms, us, ns).
+    根据查询结果DataFrame绘制多种图表，用户可交互选择图表类型。
+    若选择不匹配，允许重新选择。
     """
-    # 1. Try standard conversion first (for ISO formats etc.)
-    # Make a copy to avoid SettingWithCopyWarning
-    series_copy = series.copy()
-    converted_series = pd.to_datetime(series_copy, errors='coerce')
-    
-    if not pd.api.types.is_datetime64_any_dtype(converted_series) or converted_series.isnull().all():
-        # 2. If it fails or results in all NaT, and dtype is numeric, try unix timestamp conversion
-        if pd.api.types.is_numeric_dtype(series_copy):
-            # Check for plausible unix timestamp in nanoseconds, microseconds, or milliseconds.
-            # 1.6e18 (ns) is around 2020. A simple check for large numbers.
-            # We check the mean to avoid issues with a few outlier points.
-            if series_copy.mean() > 1e12: 
-                # Attempt conversion from nanoseconds, most likely for IoT data
-                converted_series = pd.to_datetime(series_copy, unit='ns', errors='coerce')
-            else: # Otherwise, assume seconds
-                converted_series = pd.to_datetime(series_copy, unit='s', errors='coerce')
-    
-    # Return the series only if the conversion was successful for at least one value
-    if pd.api.types.is_datetime64_any_dtype(converted_series) and not converted_series.isnull().all():
-        return converted_series
-    
-    return None
+    if df.empty:
+        console.print("[yellow]查询返回了空结果，跳过可视化。[/yellow]")
+        return
 
-def visualize_and_save(query: str, df: pd.DataFrame, output_file: str):
-    """Infer query type, visualize results with a scientific style, and save to a file."""
-    query_type_info = infer_query_type(query, df)
-    query_type = query_type_info[0] if isinstance(query_type_info, tuple) else query_type_info
-    
-    console.print(f"\n[bold cyan]🖼️  Result Visualization[/bold cyan]")
-    console.print(f"Inferred query type: [bold]{query_type}[/bold]")
+    def _prompt_for_column(dframe: pd.DataFrame, purpose: str) -> str | None:
+        """Helper function to prompt user to select a column for a specific purpose."""
+        console.print(f"\n请选择用作 [bold cyan]'{purpose}'[/bold cyan] 的列:")
+        columns = dframe.columns.tolist()
+        for i, col in enumerate(columns, 1):
+            print(f"{i}. {col}")
+        print("0. 取消选择")
 
-    fig = None
-    plot_template = "plotly_white"
-    
-    # Wrap the query and replace newlines with HTML breaks for Plotly
-    chart_title = textwrap.fill(query, width=80).replace('\n', '<br>')
+        while True:
+            try:
+                choice = int(input("请输入列的编号: "))
+                if choice == 0:
+                    return None
+                if 1 <= choice <= len(columns):
+                    return columns[choice - 1]
+                else:
+                    console.print(f"[red]无效的选择，请输入 0 到 {len(columns)} 之间的数字。[/red]")
+            except ValueError:
+                console.print("[red]请输入有效的数字！[/red]")
 
-    if query_type == "时间序列":
-        _, time_col, value_col = query_type_info
-        
-        # --- Smart Data Conversion ---
-        # 1. Convert time column to datetime and clean up
-        df[time_col] = try_convert_to_datetime(df[time_col])
-        df.dropna(subset=[time_col], inplace=True)
-        df = df.sort_values(by=time_col)
+    while True:
+        console.print("\n[bold cyan]🖼️  结果可视化[/bold cyan]")
+        console.print("请选择要生成的图表类型:")
+        print("1. 时间序列折线图 (需要一个时间列和至少一个数值列)")
+        print("2. 成对散点图 (需要至少两个数值列)")
+        print("3. 堆叠柱状图 (需要一个时间/分类列和多个数值列)")
+        print("4. 箱线图 (需要至少一个数值列)")
+        print("5. 相关性热力图 (需要至少两个数值列)")
+        print("6. 分类柱状图 (需要一个分类列和一个数值列)")
+        print("7. 分类饼状图 (需要一个分类列和一个数值列)")
+        print("0. 退出可视化")
 
-        # 2. Attempt to convert value column to numeric
-        value_series_numeric = pd.to_numeric(df[value_col], errors='coerce')
-
-        # 3. Decide plotting strategy based on value column type
-        if not value_series_numeric.isnull().all(): # Case 1: Value column is NUMERIC
-            console.print(f"Plotting numeric time series: [cyan]'{time_col}'[/cyan] vs [cyan]'{value_col}'[/cyan].")
-            df['numeric_value'] = value_series_numeric
-            df_plot = df.dropna(subset=['numeric_value'])
-            if not df_plot.empty:
-                fig = px.line(df_plot, x=time_col, y='numeric_value', title=chart_title, markers=True, template=plot_template)
-                fig.update_yaxes(title_text=value_col) # Use original column name for y-axis title
-                
-                # Ensure X-axis shows proper datetime format
-                fig.update_xaxes(
-                    type='date',
-                    tickformat='%Y-%m-%d %H:%M:%S',
-                    title_text=time_col
-                )
-        
-        else: # Case 2: Value column is CATEGORICAL
-            console.print(f"Plotting categorical time series: [cyan]'{time_col}'[/cyan] vs [cyan]'{value_col}'[/cyan].")
-            df_plot = df.dropna(subset=[value_col])
-
-            if not df_plot.empty:
-                # Create a mapping from category to integer
-                categories = df_plot[value_col].astype(str).unique()
-                category_map = {cat: i for i, cat in enumerate(categories)}
-                
-                # Apply the mapping to create a numeric column for plotting
-                df_plot['numeric_value'] = df_plot[value_col].map(category_map)
-                
-                # Use a step chart (line_shape='hv') for clearer state transitions
-                fig = px.line(df_plot, x=time_col, y='numeric_value', title=chart_title, markers=True, template=plot_template, line_shape='hv')
-                
-                # Update the y-axis to show the original string labels instead of numbers
-                fig.update_yaxes(
-                    tickvals=list(category_map.values()),
-                    ticktext=list(category_map.keys()),
-                    title_text=value_col
-                )
-                
-                # Ensure X-axis shows proper datetime format
-                fig.update_xaxes(
-                    type='date',
-                    tickformat='%Y-%m-%d %H:%M:%S',
-                    title_text=time_col
-                )
-
-    elif query_type in ["聚合分析", "类别分布"]:
-        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-        categorical_cols = df.select_dtypes(exclude=['number']).columns.tolist()
-        if numeric_cols and categorical_cols:
-            category_col = categorical_cols[0]
-            metric_col = numeric_cols[0]
-            df_plot = prepare_df_for_plotting(df, category_col, metric_col)
-            fig = px.bar(df_plot, x=category_col, y=metric_col, title=chart_title, template=plot_template)
-
-    if fig:
-        fig.update_layout(
-            title_font_size=16,
-            font=dict(family="Arial, sans-serif", size=14, color="black"),
-            xaxis_title_font_size=16,
-            yaxis_title_font_size=16,
-        )
         try:
-            # Ensure the output directory exists
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            full_path = os.path.join(OUTPUT_DIR, output_file)
-            
-            fig.write_image(full_path, scale=2) # Increase scale for better resolution
-            console.print(f"[green]✅ Visualization saved to [bold white]{full_path}[/bold white][/green]")
-            open_file(full_path)
-        except Exception as e:
-            console.print(f"[red]Error saving visualization: {e}[/red]")
-            console.print("[yellow]Please ensure you have the 'kaleido' package installed (`pip install kaleido`).[/yellow]")
-    else:
-        console.print("[yellow]No suitable visualization generated for this query type.[/yellow]")
+            choice = int(input("请输入图表类型的编号: "))
+            if choice not in range(8):
+                console.print(f"[red]无效的选择，请输入 0 到 7 之间的数字。[/red]")
+                continue
+        except ValueError:
+            console.print("[red]请输入有效的数字！[/red]")
+            continue
 
-def infer_query_type(query, df):
-    """
-    Infer query type to select a suitable visualization method.
-    This version is more robust and attempts to parse date-like strings and numeric timestamps.
-    Returns a tuple: (query_type, col1_name, col2_name) for plottable types.
-    """
-    formatted_query = sqlparse.format(query.strip(), keyword_case='upper')
-    
-    # --- 1. First check for Aggregation/Categorical queries by SQL syntax ---
-    # This takes precedence over time series detection
-    has_aggregation = ('GROUP BY' in formatted_query or 
-                      any(f in formatted_query for f in ['COUNT(', 'SUM(', 'AVG(', 'MIN(', 'MAX(']))
-    
-    if has_aggregation:
+        if choice == 0:
+            console.print("退出可视化。")
+            break
+
+        # 每次循环时重新识别列类型，以防数据被修改
         numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-        categorical_cols = df.select_dtypes(exclude=['number']).columns.tolist()
         
-        if numeric_cols and categorical_cols:
-            console.print("Query contains GROUP BY or aggregation functions. Treating as aggregation analysis.")
-            return "聚合分析"
-    
-    # --- 2. Check for Time Series ---
-    # Skip columns that are clearly aggregation results
-    skip_columns = [col for col in df.columns if any(agg in col.lower() for agg in 
-                   ['count(', 'sum(', 'avg(', 'min(', 'max(', 'count', 'sum', 'avg'])]
-    
-    # Find a time column
-    time_col_name = None
-    for col_name in df.columns:
-        # Skip aggregation result columns for time detection
-        if col_name in skip_columns:
+        # 准备绘图
+        plt.style.use('seaborn-v0_8-whitegrid')
+        fig, ax = plt.subplots(figsize=(12, 7))
+        plot_generated = False
+
+        if choice == 1:
+            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+            if not numeric_cols:
+                console.print("[bold red]错误：未找到可用于绘图的数值列。[/bold red]")
+                plt.close(fig)
+                continue
+
+            time_col = _prompt_for_column(df, "时间轴 (X-axis)")
+            if not time_col:
+                plt.close(fig)
+                continue
+
+            plot_df = df.copy()
+            try:
+                plot_df[time_col] = pd.to_datetime(plot_df[time_col], errors='raise')
+                plot_df = plot_df.sort_values(by=time_col)
+            except Exception as e:
+                console.print(f"[bold red]无法将列 '{time_col}' 转换为时间格式: {e}[/bold red]")
+                console.print("请确保选择的列包含有效的日期/时间数据，或选择其他图表类型。")
+                plt.close(fig)
+                continue
+            
+            plot_generated = True
+            for col in numeric_cols:
+                ax.plot(plot_df[time_col], plot_df[col], label=col, marker='o', linestyle='-')
+            ax.set_title("Time Series Plot", fontsize=16)
+            ax.set_xlabel(time_col, fontsize=12)
+            ax.set_ylabel("Value", fontsize=12)
+            plt.xticks(rotation=45)
+
+        elif choice == 2 and len(numeric_cols) > 1:
+            plot_generated = True
+            plt.close(fig) # Pairplot 创建自己的 figure
+            pair_plot = sns.pairplot(df[numeric_cols])
+            pair_plot.fig.suptitle("Pairplot of Numerical Values", y=1.02, fontsize=16)
+
+        elif choice == 3:
+            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+            non_numeric_cols = df.select_dtypes(exclude=['number']).columns.tolist()
+
+            if not numeric_cols or not non_numeric_cols:
+                console.print("[bold red]错误：堆叠柱状图需要至少一个非数值列（作X轴）和至少一个数值列。[/bold red]")
+                plt.close(fig)
+                continue
+            
+            x_col = _prompt_for_column(df[non_numeric_cols], "X轴 (类别/时间)")
+            if not x_col:
+                plt.close(fig)
+                continue
+                
+            plot_df = df.copy()
+            try:
+                # 尝试将X轴转换为datetime以获得更好的排序和显示
+                plot_df[x_col] = pd.to_datetime(plot_df[x_col])
+                plot_df = plot_df.sort_values(by=x_col)
+                # For dates, don't use too many ticks on the bar chart
+                if pd.api.types.is_datetime64_any_dtype(plot_df[x_col]):
+                    ax.xaxis.set_major_locator(plt.MaxNLocator(15)) # Limit number of date ticks
+            except (ValueError, TypeError):
+                # 如果不是日期，则按原样处理
+                pass
+            
+            plot_generated = True
+            plot_df.set_index(x_col)[numeric_cols].plot(kind="bar", stacked=True, ax=ax, width=0.8)
+            ax.set_title("Stacked Bar Plot", fontsize=16)
+            ax.set_xlabel(x_col, fontsize=12)
+            ax.set_ylabel("Value", fontsize=12)
+            plt.xticks(rotation=45, ha='right')
+
+        elif choice == 4 and len(numeric_cols) > 0:
+            plot_generated = True
+            df[numeric_cols].boxplot(ax=ax)
+            ax.set_title("Box Plot of Values", fontsize=16)
+            ax.set_ylabel("Value", fontsize=12)
+
+        elif choice == 5 and len(numeric_cols) > 1:
+            plot_generated = True
+            correlation_matrix = df[numeric_cols].corr()
+            sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm", vmin=-1, vmax=1, ax=ax)
+            ax.set_title("Correlation Heatmap", fontsize=16)
+
+        elif choice == 6 and len(non_numeric_cols) > 0 and len(numeric_cols) > 0:
+            plot_generated = True
+            cat_col = non_numeric_cols[0]
+            num_col = numeric_cols[0]
+            sns.barplot(x=cat_col, y=num_col, data=df, ax=ax, palette='viridis')
+            ax.set_title(f"Distribution of '{num_col}' by '{cat_col}'", fontsize=16)
+            ax.set_xlabel(cat_col, fontsize=12)
+            ax.set_ylabel(num_col, fontsize=12)
+            plt.xticks(rotation=45)
+
+        elif choice == 7 and len(non_numeric_cols) > 0 and len(numeric_cols) > 0:
+            plot_generated = True
+            cat_col = non_numeric_cols[0]
+            num_col = numeric_cols[0]
+            # 聚合数据以防分类列中有重复项
+            data_for_pie = df.groupby(cat_col)[num_col].sum()
+            ax.pie(data_for_pie, labels=data_for_pie.index, autopct='%1.1f%%', colors=sns.color_palette('viridis', len(data_for_pie)))
+            ax.set_title(f"Proportion of '{num_col}' by '{cat_col}'", fontsize=16)
+
+        else:
+            console.print("[bold red]数据不满足所选图表类型的要求，请重新选择。[/bold red]")
+            plt.close(fig) # 关闭未使用的figure
             continue
             
-        if try_convert_to_datetime(df[col_name]) is not None:
-            time_col_name = col_name
-            break
-            
-    if time_col_name:
-        # Found a time column. Find a suitable value column that is not the time column.
-        value_cols = [col for col in df.columns if col != time_col_name]
-        if value_cols:
-            console.print(f"Found time column: '{time_col_name}'. Treating as time series.")
-            return "时间序列", time_col_name, value_cols[0]
+        if plot_generated:
+            try:
+                # 添加图例
+                if choice not in [2, 5, 7]: # Pairplot, Heatmap, Pieplot 有自己的图例逻辑
+                    ax.legend()
+                
+                fig.suptitle(query, fontsize=10, y=0.99, wrap=True)
+                plt.tight_layout(rect=[0, 0, 1, 0.96])
 
-    # --- 3. Check for simple categorical distributions ---
-    if len(df.columns) == 2 and pd.api.types.is_numeric_dtype(df.iloc[:, 1]):
-        return "类别分布"
+                os.makedirs(OUTPUT_DIR, exist_ok=True)
+                output_file = "visualization.png"
+                full_path = os.path.join(OUTPUT_DIR, output_file)
+                plt.savefig(full_path, dpi=300)
+                plt.close(fig) # 关闭figure释放内存
 
-    # --- 4. Default to general query ---
-    return "一般查询" 
+                console.print(f"[green]✅ 可视化结果已保存至 [bold white]{full_path}[/bold white][/green]")
+                open_file(full_path)
+                break # 成功生成图表后退出循环
+
+            except Exception as e:
+                console.print(f"[red]生成或保存可视化时出错: {e}[/red]")
+                plt.close(fig)
+                break
