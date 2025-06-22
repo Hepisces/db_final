@@ -23,7 +23,6 @@ def save_config(config_data: dict):
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config_data, f, indent=2)
-        console.print(f"数据源配置已保存至 [cyan]{CONFIG_FILE}[/cyan].")
     except Exception as e:
         console.print(f"[bold red]保存配置失败: {e}[/bold red]")
 
@@ -37,6 +36,17 @@ def load_config() -> dict:
     except (json.JSONDecodeError, OSError) as e:
         console.print(f"[bold red]加载或解析配置文件失败 {CONFIG_FILE}: {e}[/bold red]")
         return {}
+
+def create_default_config_if_not_exists(ddl_path: str):
+    """Creates a default config file if it doesn't exist, setting the DDL path."""
+    if not os.path.exists(CONFIG_FILE):
+        console.print(f"检测到配置文件 '{CONFIG_FILE}' 不存在，将创建一个默认配置。")
+        default_config = {
+            "model_path": None,
+            "ddl_path": ddl_path
+        }
+        save_config(default_config)
+        console.print(f"已将默认DDL路径设置为: [cyan]{ddl_path}[/cyan]")
 
 # --- Database and Data Loading Logic ---
 

@@ -577,6 +577,7 @@ def import_data(
     此命令在导入前会重置数据库。
     """
     db.reset_db(db_name)
+    ddl_path = data_dir / "DDL.sql"
     
     try:
         with db.create_connection(db_name) as conn:
@@ -585,6 +586,10 @@ def import_data(
                 return
             db.import_real_data(conn, str(data_dir))
         console.print(f"[bold green]所有数据已成功导入到 '{db_name}'。[/bold green]")
+        
+        # After successful import, create a default config if it doesn't exist
+        db.create_default_config_if_not_exists(str(ddl_path))
+
     except Exception as e:
         console.print(f"[bold red]数据导入期间出错: {e}[/bold red]")
 
@@ -681,7 +686,7 @@ def set_model_path(
     config = db.load_config()
     config["model_path"] = str(path)
     db.save_config(config)
-    console.print(f"[green]模型路径已设为: [cyan]{path}[/cyan][/green]")
+    console.print(f"[green]模型路径已更新为: [cyan]{path}[/cyan][/green]")
 
 @config_app.command(name="set-ddl-path")
 def set_ddl_path(
@@ -694,11 +699,11 @@ def set_ddl_path(
         resolve_path=True,
     )
 ):
-    """Sets and saves the DDL file path for AI-powered commands."""
+    """Sets and saves the DDL file path for the 'ask' and 'check' commands."""
     config = db.load_config()
     config["ddl_path"] = str(path)
     db.save_config(config)
-    console.print(f"[green]DDL文件路径已设为: [cyan]{path}[/cyan][/green]")
+    console.print(f"[green]DDL文件路径已更新为: [cyan]{path}[/cyan][/green]")
 
 @config_app.command(name="show")
 def show_config():
