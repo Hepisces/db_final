@@ -438,7 +438,7 @@ def run(
     query = query.strip().rstrip(';')
 
     # Check if it's a read-only query
-    is_read_only = visualizer.is_read_only_query(query)
+    is_read_only = is_read_only_query(query)
 
     if not is_read_only:
         console.print("[bold yellow]警告: 这似乎是一个修改性查询。[/bold yellow]")
@@ -484,7 +484,7 @@ def run(
         output_file = os.path.join(OUTPUT_DIR, f"{safe_filename}.png")
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-        visualizer.visualize_and_save(query, result_df, output_file)
+        visualize_and_save(query, result_df, output_file)
         open_file(output_file)
     else:
         console.print("[yellow]查询未返回数据，跳过图表生成。[/yellow]")
