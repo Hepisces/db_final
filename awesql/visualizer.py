@@ -14,7 +14,7 @@ from pathlib import Path
 
 console = Console()
 
-OUTPUT_DIR = "output"
+OUTPUT_DIR = Path("output")
 
 PLAN_EXPLANATIONS = {
     "SCAN": "全表扫描: 从头到尾读取表的每一行。对于大表，这可能效率不高。通常意味着没有使用索引。",
@@ -98,39 +98,65 @@ def generate_er_diagram(ddl_path: str, output_path: str):
     relationships = []
 
     # Regex to find tables and their columns
-    table_pattern = re.compile(r"CREATE TABLE\s+(\w+)\s+\((.*?)\);", re.S | re.I)
-    # Regex to find foreign key constraints
-    fk_pattern = re.compile(r"FOREIGN KEY\s+\((.*?)\)\s+REFERENCES\s+(\w+)\s*\((.*?)\)", re.I)
+    table_pattern = re.compile(r"CREATE TABLE\s+([\w`\"]+)\s*\((.*?)\);", re.S | re.I)
+    # Regex for composite PRIMARY KEY
+    composite_pk_pattern = re.compile(r"PRIMARY KEY\s*\((.*?)\)", re.I | re.S)
+    # Regex to find foreign key constraints, including named constraints
+    fk_pattern = re.compile(
+        r"(?:CONSTRAINT\s+\w+\s+)?FOREIGN KEY\s*\((.*?)\)\s*REFERENCES\s*([\w`\"]+)\s*\((.*?)\)", 
+        re.I | re.S
+    )
 
     for match in table_pattern.finditer(ddl_content):
-        table_name = match.group(1)
+        table_name = match.group(1).strip('`"')
+        # The full block for the table definition, including constraints after the columns
+        table_definition_block = match.group(0) 
         columns_str = match.group(2)
         
+        # Step 1: Find all primary key columns for this table
+        primary_keys = set()
+        # Find composite PKs first from the entire column definition string
+        pk_match = composite_pk_pattern.search(columns_str)
+        if pk_match:
+            pk_cols_str = pk_match.group(1)
+            # Get individual column names, stripping quotes and spaces
+            pk_cols = [c.strip('`" ') for c in pk_cols_str.split(',')]
+            primary_keys.update(pk_cols)
+
+        # Step 2: Parse columns and find inline PKs
         columns = []
-        # Simple split by comma, ignoring commas inside parentheses for data types like NUMERIC(10, 2)
         for col_def in re.split(r',(?![^\(]*\))', columns_str):
             col_def = col_def.strip()
-            if not col_def or col_def.lower().startswith(('primary key', 'foreign key', 'constraint')):
+            # Skip constraint definitions in the column list
+            if col_def.lower().startswith(('primary key', 'foreign key', 'constraint')):
                 continue
             
             # Extract column name, trying to be robust against various definitions
             parts = col_def.split()
+            if not parts:
+                continue
             col_name = parts[0].strip('"`')
             col_type = parts[1] if len(parts) > 1 else ""
             
-            # Check for primary key marker
-            is_pk = "PRIMARY KEY" in col_def.upper()
+            # Check for inline primary key
+            if "PRIMARY KEY" in col_def.upper():
+                primary_keys.add(col_name)
+
+            # Mark column as PK if its name is in our set of primary keys
+            is_pk = col_name in primary_keys
             
             columns.append({"name": col_name, "type": col_type, "is_pk": is_pk})
         
         tables[table_name] = columns
 
-        # Find foreign keys within the table definition
-        for fk_match in fk_pattern.finditer(columns_str):
-            from_col = fk_match.group(1).strip()
-            to_table = fk_match.group(2).strip()
-            to_col = fk_match.group(3).strip()
-            relationships.append(f'    "{table_name}" --o| "{to_table}" : "{from_col} -> {to_col}"')
+        # Step 3: Find foreign keys within the entire table definition block
+        for fk_match in fk_pattern.finditer(table_definition_block):
+            from_col = fk_match.group(1).strip('`" ')
+            to_table = fk_match.group(2).strip('`" ')
+            to_col = fk_match.group(3).strip('`" ')
+            # Correct relationship syntax: from "one" side (referenced table) to "many" side (this table)
+            # "one and only one" ||--|{ "one or more"
+            relationships.append(f'    "{to_table}" ||--|{{ "{table_name}" : "references {from_col}"')
 
     # Build Mermaid diagram string
     mermaid_string = "erDiagram\n"
@@ -165,11 +191,12 @@ def generate_er_diagram(ddl_path: str, output_path: str):
     """
     
     try:
-        # The output_path is now the full file path, so we get its parent directory
-        output_dir = os.path.dirname(output_path)
-        os.makedirs(output_dir, exist_ok=True)
+        # 确保输出目录存在
+        output_path_obj = Path(output_path)
+        output_dir = output_path_obj.parent
+        output_dir.mkdir(exist_ok=True)
         
-        # Use the full path directly
+        # 写入HTML文件
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(textwrap.dedent(html_template))
             
@@ -200,7 +227,7 @@ def print_results_table(df: pd.DataFrame):
         
     console.print(table)
 
-def visualize_query_result(df: pd.DataFrame, query: str):
+def visualize_query_result(df: pd.DataFrame, query: str, output_file_path: Path):
     """
     根据查询结果DataFrame绘制多种图表，用户可交互选择图表类型。
     若选择不匹配，允许重新选择。
@@ -475,14 +502,12 @@ def visualize_query_result(df: pd.DataFrame, query: str):
                 fig.suptitle(query, fontsize=10, y=0.99, wrap=True)
                 plt.tight_layout(rect=[0, 0, 1, 0.96])
 
-                os.makedirs(OUTPUT_DIR, exist_ok=True)
-                output_file = "visualization.png"
-                full_path = os.path.join(OUTPUT_DIR, output_file)
-                plt.savefig(full_path, dpi=300)
+                # The directory is created by the caller in cli.py, so we just save.
+                plt.savefig(output_file_path, dpi=300)
                 plt.close(fig) # 关闭figure释放内存
 
-                console.print(f"[green]✅ 可视化结果已保存至 [bold white]{full_path}[/bold white][/green]")
-                open_file(full_path)
+                console.print(f"[green]✅ 可视化结果已保存至 [bold white]{output_file_path}[/bold white][/green]")
+                open_file(output_file_path)
                 break # 成功生成图表后退出循环
 
             except Exception as e:

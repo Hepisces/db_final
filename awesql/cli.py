@@ -39,7 +39,7 @@ console = Console()
 
 DB_FILE = "visualization_demo.db"
 DATA_DIR = "Smart_Home_DATA"
-OUTPUT_DIR = "visulization/output"
+OUTPUT_DIR = Path("output")
 
 PLAN_EXPLANATIONS = {
     "SCAN": "全表扫描: 从头到尾读取表的每一行。对于大表，这可能效率不高。通常意味着没有使用索引。",
@@ -172,16 +172,19 @@ def draw_query_plan(plan_df: pd.DataFrame):
 def open_file(filepath):
     """Open a file in the default application for the current platform."""
     try:
+        # 确保filepath是字符串
+        filepath_str = str(filepath)
+        
         if sys.platform == "win32":
-            os.startfile(filepath)
+            os.startfile(filepath_str)
         elif sys.platform == "darwin": # macOS
-            subprocess.run(["open", filepath], check=True)
+            subprocess.run(["open", filepath_str], check=True)
         else: # linux
-            subprocess.run(["xdg-open", filepath], check=True)
-        console.print(f"✅ Automatically opened [bold white]{filepath}[/bold white]")
+            subprocess.run(["xdg-open", filepath_str], check=True)
+        console.print(f"✅ Automatically opened [bold white]{filepath_str}[/bold white]")
     except (FileNotFoundError, subprocess.CalledProcessError) as e:
         console.print(f"[bold red]Could not automatically open file:[/bold red] {e}")
-        console.print(f"Please find it at: {os.path.abspath(filepath)}")
+        console.print(f"Please find it at: {os.path.abspath(filepath_str)}")
 
 def print_results_table(df: pd.DataFrame):
     """Print the query results as a table in the console, limited to 10 rows."""
@@ -232,7 +235,12 @@ def try_convert_to_datetime(series: pd.Series) -> pd.Series | None:
     # 1. Try standard conversion first (for ISO formats etc.)
     # Make a copy to avoid SettingWithCopyWarning
     series_copy = series.copy()
-    converted_series = pd.to_datetime(series_copy, errors='coerce')
+    try:
+        # First try with a specific format
+        converted_series = pd.to_datetime(series_copy, format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+    except:
+        # If that fails, fall back to automatic format detection
+        converted_series = pd.to_datetime(series_copy, errors='coerce')
     
     if not pd.api.types.is_datetime64_any_dtype(converted_series) or converted_series.isnull().all():
         # 2. If it fails or results in all NaT, and dtype is numeric, try unix timestamp conversion
@@ -252,7 +260,7 @@ def try_convert_to_datetime(series: pd.Series) -> pd.Series | None:
     
     return None
 
-def visualize_and_save(query: str, df: pd.DataFrame, output_file: str):
+def visualize_and_save(query: str, df: pd.DataFrame, output_file: Path):
     """Infer query type, visualize results with a scientific style, and save to a file."""
     query_type_info = infer_query_type(query, df)
     query_type = query_type_info[0] if isinstance(query_type_info, tuple) else query_type_info
@@ -340,13 +348,15 @@ def visualize_and_save(query: str, df: pd.DataFrame, output_file: str):
             yaxis_title_font_size=16,
         )
         try:
-            # Ensure the output directory exists
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            full_path = os.path.join(OUTPUT_DIR, output_file)
+            # 确保输出目录存在（虽然应该已经在调用前创建了）
+            OUTPUT_DIR.mkdir(exist_ok=True)
             
-            fig.write_image(full_path, scale=2) # Increase scale for better resolution
-            console.print(f"[green]✅ Visualization saved to [bold white]{full_path}[/bold white][/green]")
-            open_file(full_path)
+            # 将Path对象转换为字符串以供plotly使用
+            output_path = str(output_file)
+            
+            fig.write_image(output_path, scale=2) # Increase scale for better resolution
+            console.print(f"[green]✅ Visualization saved to [bold white]{output_path}[/bold white][/green]")
+            open_file(output_path)
         except Exception as e:
             console.print(f"[red]Error saving visualization: {e}[/red]")
             console.print("[yellow]Please ensure you have the 'kaleido' package installed (`pip install kaleido`).[/yellow]")
@@ -470,22 +480,24 @@ def run(
         
     # 1. Draw Query Plan
     if plan_df is not None and not plan_df.empty:
-        draw_query_plan(plan_df)
+        visualizer.draw_query_plan(plan_df)
     else:
         console.print("[yellow]未能获取查询计划。[/yellow]")
 
     # 2. Print Results Table
-    print_results_table(result_df)
+    visualizer.print_results_table(result_df)
         
-    # 3. Visualize and Save Chart
+    # 3. Visualize and Save Chart using the interactive visualizer
     if not result_df.empty:
         # Create a safe filename from the query
         safe_filename = "".join(c if c.isalnum() else "_" for c in query)[:50]
-        output_file = os.path.join(OUTPUT_DIR, f"{safe_filename}.png")
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        # 使用Path对象正确拼接路径
+        output_file = OUTPUT_DIR / f"{safe_filename}.png"
+        # 确保输出目录存在
+        OUTPUT_DIR.mkdir(exist_ok=True)
 
-        visualize_and_save(query, result_df, output_file)
-        open_file(output_file)
+        # Call the interactive visualizer from the visualizer module
+        visualizer.visualize_query_result(result_df, query, output_file)
     else:
         console.print("[yellow]查询未返回数据，跳过图表生成。[/yellow]")
 
@@ -538,7 +550,10 @@ def er(
     从 DDL 文件生成并显示数据库的 E-R (实体-关系) 图。
     """
     ddl_path = data_dir / "DDL.sql"
-    output_path = Path(OUTPUT_DIR) / "er_diagram.html"
+    output_path = OUTPUT_DIR / "er_diagram.html"
+    
+    # 确保输出目录存在
+    OUTPUT_DIR.mkdir(exist_ok=True)
     
     console.print(f"正在从 [cyan]{ddl_path}[/cyan] 生成 E-R 图...")
     visualizer.generate_er_diagram(str(ddl_path), str(output_path))
