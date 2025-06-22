@@ -16,6 +16,12 @@
 4. **命令行接口**：提供统一的用户交互入口
 5. **自然语言处理模块**（可选）：支持自然语言到 SQL 的转换功能
 
+## 数据准备
+
+数据已经上传到Google Drive, 可以通过以下链接下载, 并和代码文件放到同级目录即可使用
+
+https://drive.google.com/drive/folders/1BCjw3aSsn971_VX0En4KYIbkVaLf0acN?usp=drive_link
+
 ## 安装方法
 
 推荐使用 Conda 环境管理工具进行安装：
@@ -27,18 +33,28 @@ conda activate awesql
 
 # 安装选项
 
-# 1. 基础安装（核心功能）
+# 1. 克隆项目
+git clone git@github.com:Hepisces/db_final.git
+
+# 2. 进入项目目录
+cd db_final
+
+# 3. 基础安装（核心功能）
 pip install -e .
 
-# 2. 完整安装（包含text2sql组件）
+# 4. 完整安装（包含text2sql组件）
 pip install -e '.[AI]'
+
+# 5. (推荐)将数据文件放到同级目录
 ```
 
 ## 功能与用法
 
 ### 数据库初始化
 
-从 SQL 文件导入数据并初始化数据库：
+从 SQL 文件导入数据并初始化数据库, 如果你执行了5. 将数据文件放到同级目录, 则可以不必指定--dir参数, 同时默认的数据库名称为project2025
+
+如果是自定义的数据, 请确保DDL文件的命名方式为`DDL.sql`, 并与其他文件放在同一文件夹下, 同时指定--dir参数为该文件夹路径
 
 ```bash
 awesql import-data [--dir DATA_DIRECTORY] [--db-name DB_NAME]
