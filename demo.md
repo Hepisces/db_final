@@ -17,7 +17,7 @@
    ```
    
 
-https://github.com/user-attachments/assets/3f0a018b-70f3-42a9-9b34-309e5e33e373
+   https://github.com/user-attachments/assets/3f0a018b-70f3-42a9-9b34-309e5e33e373
 
 
 
@@ -28,7 +28,7 @@ https://github.com/user-attachments/assets/3f0a018b-70f3-42a9-9b34-309e5e33e373
    ```
 
 
-https://github.com/user-attachments/assets/dc30b460-f0c5-4c5b-b15b-ab916e4290e3
+   https://github.com/user-attachments/assets/dc30b460-f0c5-4c5b-b15b-ab916e4290e3
 
 
 4. **生成实体关系图**
@@ -38,7 +38,7 @@ https://github.com/user-attachments/assets/dc30b460-f0c5-4c5b-b15b-ab916e4290e3
    ```
 
 
-https://github.com/user-attachments/assets/2fd24936-63e7-4a97-a0cc-94f6d2645370
+   https://github.com/user-attachments/assets/2fd24936-63e7-4a97-a0cc-94f6d2645370
 
 
 5. **SQL语法检查**
@@ -50,7 +50,7 @@ https://github.com/user-attachments/assets/2fd24936-63e7-4a97-a0cc-94f6d2645370
    ```
 
 
-https://github.com/user-attachments/assets/b34db222-cd01-4b74-b10f-17f7a8030d35
+   https://github.com/user-attachments/assets/b34db222-cd01-4b74-b10f-17f7a8030d35
 
 
 6. **执行SQL查询并可视化**
@@ -64,7 +64,7 @@ https://github.com/user-attachments/assets/b34db222-cd01-4b74-b10f-17f7a8030d35
    ```
 
 
-https://github.com/user-attachments/assets/4e52a3d8-b3a8-4d07-904d-3006f8b1a23a
+   https://github.com/user-attachments/assets/4e52a3d8-b3a8-4d07-904d-3006f8b1a23a
 
 
 7. **自然语言查询**
@@ -74,7 +74,7 @@ https://github.com/user-attachments/assets/4e52a3d8-b3a8-4d07-904d-3006f8b1a23a
    ```
 
 
-https://github.com/user-attachments/assets/7244a799-e189-4c18-a035-fb5f735caf67
+   https://github.com/user-attachments/assets/7244a799-e189-4c18-a035-fb5f735caf67
 
 
 8. **重置数据库**
@@ -84,5 +84,5 @@ https://github.com/user-attachments/assets/7244a799-e189-4c18-a035-fb5f735caf67
    ```
    
 
-https://github.com/user-attachments/assets/7fbcb981-ae1d-4f06-90f6-e86debc9d501
+   https://github.com/user-attachments/assets/7fbcb981-ae1d-4f06-90f6-e86debc9d501
 
