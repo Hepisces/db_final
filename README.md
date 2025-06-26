@@ -6,6 +6,8 @@
 
 本项目采用 Python 语言实现，基于 SQLite 数据库引擎，结合 Typer、Rich、Plotly 和 Mermaid.js 等开源框架构建。
 
+您可以使用overleaf或者本地的Latex查看我们的论文获取更多的信息[查看我们的论文](https://github.com/Hepisces/SWUFE-Database-Final)
+
 ## 技术架构
 
 本工具采用模块化设计，主要包含以下组件：
